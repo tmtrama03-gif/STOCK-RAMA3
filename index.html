@@ -3724,6 +3724,45 @@ const TurnoverUpload = (function(){
     return { turnoverRateByGroup, monthlyStockByGroup, monthsPresent, usedCalendarFallbackForMonths, refYear: refYear || null };
   }
 
+  // v96: รองรับไฟล์ D/O แบบใหม่ (รายงาน SAP "DOR301") ที่ไม่มีคอลัมน์วันที่ต่อแถวเลย เพราะไฟล์ถูกกรองมาแล้วว่า
+  // เป็นของเดือนเดียวทั้งไฟล์ (เดือน/ปีอยู่ในชื่อไฟล์หรือชื่อชีทแทน เช่น "DOR301-30.09.2026") ต่างจากรูปแบบเดิมที่มี
+  // คอลัมน์ "Actual GI Date" ต่อแถว (ไฟล์เดียวมีได้หลายเดือน) — หาแถวหัวตารางที่มี Material Code/Material Group/
+  // Net Weight ครบ แต่ไม่มีคอลัมน์วันที่ (ถ้ามีคอลัมน์วันที่แปลว่าเป็นรูปแบบเดิม ให้ findDoLayout จัดการตามปกติ)
+  function detectNoDateDoLayout(rows){
+    const limit = Math.min(rows.length, 10);
+    for(let r=0; r<limit; r++){
+      const row = rows[r] || [];
+      if(colIndex(row, DO_HDR.date) != null) continue;
+      if(colIndex(row, DO_HDR.weight) == null) continue;
+      if(colIndex(row, DO_HDR.mat) == null) continue;
+      if(colIndex(row, DO_HDR.group) == null) continue;
+      return r;
+    }
+    return null;
+  }
+  // หาเลขปี ค.ศ. (4 หลัก 20xx หรือ พ.ศ. 25xx แปลงเป็น ค.ศ.) จากข้อความ เช่น ชื่อไฟล์/ชื่อชีท
+  function yearFromText(text){
+    if(typeof text !== 'string') return null;
+    const m = /(20\d\d|25\d\d)/.exec(text);
+    if(!m) return null;
+    let y = parseInt(m[1], 10);
+    if(y > 2400) y -= 543;
+    return y;
+  }
+  // เติมคอลัมน์วันที่ปลอม (วันที่ 1 ของเดือน/ปีที่เดาได้) ลงในแถวหัวตารางและทุกแถวข้อมูล เพื่อให้ใช้ท่อคำนวณเดิม
+  // (findDoLayout / computeDoMonthGroup) ได้เหมือนรูปแบบเดิมทุกประการ โดยไม่ต้องเขียนตัวคำนวณซ้ำ
+  function injectSyntheticDoDate(rows, headerRowIdx, monthNum, yearNum){
+    const out = rows.map(r => r ? r.slice() : r);
+    if(!out[headerRowIdx]) out[headerRowIdx] = [];
+    const newCol = out[headerRowIdx].length;
+    out[headerRowIdx][newCol] = 'Actual GI Date';
+    const dateStr = `01.${String(monthNum).padStart(2,'0')}.${yearNum}`;
+    for(let i = headerRowIdx + 1; i < out.length; i++){
+      if(out[i]) out[i][newCol] = dateStr;
+    }
+    return out;
+  }
+
   /* ---------------- Public entry point ---------------- */
   async function parseDoAndStockFiles(doFile, stockFile){
     const lowerDo = doFile.name.toLowerCase();
@@ -3734,9 +3773,29 @@ const TurnoverUpload = (function(){
     const [doBuf, stockBuf] = await Promise.all([doFile.arrayBuffer(), stockFile.arrayBuffer()]);
     const doWb = await loadWorkbook(doBuf);
     if(!doWb.sheets.length) throw new Error('ไม่พบชีทข้อมูลในไฟล์ DO ที่อัปโหลด');
-    const doRows = await doWb.rows(doWb.sheets[0].name);
-    const { doMonthGroup, parsed, skipped, detectedYear, doDiag, doTotals, doProducts, doDescMap, doCustomers, doGroupQty } = computeDoMonthGroup(doRows);
-    if(parsed === 0) throw new Error('อ่านไฟล์ DO ไม่พบข้อมูลรายการใดเลย — โครงสร้างไฟล์อาจไม่ตรงกับรูปแบบรายงาน DO ที่ระบบนี้รองรับ');
+    let doRows = await doWb.rows(doWb.sheets[0].name);
+    let doResult = computeDoMonthGroup(doRows);
+    if(doResult.parsed === 0){
+      // ลองหารูปแบบใหม่ (ไม่มีคอลัมน์วันที่) ในทุกชีทของไฟล์ — ไฟล์ DOR301 มีชีทสรุป (pivot) นำหน้าชีทรายละเอียด
+      let matched = null;
+      for(const sheet of doWb.sheets){
+        const rows = await doWb.rows(sheet.name);
+        const headerRowIdx = detectNoDateDoLayout(rows);
+        if(headerRowIdx != null){ matched = { sheet, rows, headerRowIdx }; break; }
+      }
+      if(!matched){
+        throw new Error('อ่านไฟล์ DO ไม่พบข้อมูลรายการใดเลย — โครงสร้างไฟล์อาจไม่ตรงกับรูปแบบรายงาน DO ที่ระบบนี้รองรับ');
+      }
+      const monthNum = monthFromText(matched.sheet.name) ?? monthFromText(doFile.name);
+      const yearNum = yearFromText(matched.sheet.name) ?? yearFromText(doFile.name);
+      if(monthNum == null || yearNum == null){
+        throw new Error(`พบไฟล์ DO รูปแบบใหม่ (ไม่มีคอลัมน์วันที่ต่อแถว ชีท "${matched.sheet.name}") แต่หาเดือน/ปีจากชื่อไฟล์หรือชื่อชีทไม่ได้ — กรุณาตั้งชื่อไฟล์หรือชื่อชีทให้มีเดือน/ปีกำกับชัดเจน เช่น "DOR301-30.09.2026"`);
+      }
+      doRows = injectSyntheticDoDate(matched.rows, matched.headerRowIdx, monthNum, yearNum);
+      doResult = computeDoMonthGroup(doRows);
+      if(doResult.parsed === 0) throw new Error('อ่านไฟล์ DO ไม่พบข้อมูลรายการใดเลย — โครงสร้างไฟล์อาจไม่ตรงกับรูปแบบรายงาน DO ที่ระบบนี้รองรับ');
+    }
+    const { doMonthGroup, parsed, skipped, detectedYear, doDiag, doTotals, doProducts, doDescMap, doCustomers, doGroupQty } = doResult;
 
     const stockWb = await loadWorkbook(stockBuf);
     // จับคู่ชีทเดือนแบบยืดหยุ่น: เดินดูชื่อชีทจริงทั้งหมดในไฟล์ ไม่ใช่ค้นหาด้วยชื่อที่ hardcode ไว้ตายตัว
@@ -4064,6 +4123,7 @@ function loadSOFromLocalStorage(){
 
 async function saveSOUploadToDb(result){
   const payload = Object.assign({}, result, { uploaded_at: new Date().toISOString() });
+  soUploadedAt = payload.uploaded_at; refreshSOResetLock();
   let dbSaved=false, dbErrorCode=null, savedVia=null;
   const { store, kind } = await getSyncStoreSafe();
   if(store){
@@ -4085,6 +4145,7 @@ async function loadSOUploadFromDb(){
   }
   if(!d){ const ls = loadSOFromLocalStorage(); if(ls && ls.backorder){ d=ls; source='local'; } }
   if(!d) return;
+  soUploadedAt = d.uploaded_at || null; refreshSOResetLock();
   applySOUploadResult(d);
   const sourceTxt = source==='claude' ? 'บันทึกถาวรในระบบแล้ว'
     : source==='firebase' ? 'บันทึกถาวรผ่าน Firebase แล้ว (sync ทุกเครื่อง/เบราว์เซอร์ที่เปิดเว็บนี้)'
@@ -4097,6 +4158,7 @@ function initSOResetButton(){
   if(!btn) return;
   const label = btn.textContent;
   let armed=false, timer=null;
+  refreshSOResetLock();
   btn.addEventListener('click', async () => {
     if(!armed){
       armed=true; btn.textContent='กดอีกครั้งเพื่อยืนยันการล้างข้อมูล'; btn.style.color='var(--critical)';
@@ -4124,6 +4186,7 @@ function initSOResetButton(){
     });
     recomputeBackorderOverdue();
     refreshDashboardAfterDataChange();
+    soUploadedAt = null; refreshSOResetLock();
     setSOUploadStatus(`ล้างข้อมูลที่อัปโหลดแล้ว — กลับไปใช้ข้อมูลตั้งต้น (รายงาน SAP ณ ${SO_ORIGINAL.backorderAsof}) (อัปโหลดไฟล์ใหม่ได้เลย)`, 'muted');
   });
 }
@@ -4177,6 +4240,33 @@ function formatUploadTimestamp(iso){
     return d.toLocaleString('th-TH', { year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
   }catch(e){ return iso; }
 }
+
+// v97: ปุ่ม "ล้างข้อมูลที่อัปโหลด" ทั้งสองปุ่ม (D/O+Stock และ SO Outstanding) กดได้เฉพาะภายใน 1 ชั่วโมงหลัง
+// อัปโหลดครั้งล่าสุดเท่านั้น — กันไม่ให้กดล้างข้อมูลที่อัปโหลดไปนานแล้วโดยไม่ตั้งใจ (ตามคำขอผู้ใช้) เวลาที่ใช้เทียบคือ
+// นาฬิกาเครื่องผู้ใช้เอง ไม่ใช่เวลาเซิร์ฟเวอร์ — เพียงพอสำหรับกันกดพลาด ไม่ใช่ตัวล็อกที่ปลอดภัยระดับความปลอดภัยสูง
+const RESET_LOCK_MS = 60 * 60 * 1000; // 1 ชั่วโมง
+let turnoverUploadedAt = null;  // ISO string ของเวลาอัปโหลดไฟล์ D/O+Stock ล่าสุด (null = ยังไม่เคยอัปโหลด/ยังไม่โหลดเสร็จ)
+let soUploadedAt = null;        // ISO string ของเวลาอัปโหลดไฟล์ SO Outstanding ล่าสุด
+function updateResetLock(btn, uploadedAtIso, lockedNote){
+  if(!btn) return;
+  const uploadedMs = uploadedAtIso ? new Date(uploadedAtIso).getTime() : null;
+  const elapsed = uploadedMs != null && !isNaN(uploadedMs) ? (Date.now() - uploadedMs) : null;
+  const locked = elapsed == null || elapsed > RESET_LOCK_MS || elapsed < 0;
+  btn.disabled = locked;
+  btn.title = locked ? lockedNote : 'กดเพื่อล้างข้อมูลที่อัปโหลด';
+  btn.style.opacity = locked ? '0.5' : '';
+  btn.style.cursor = locked ? 'not-allowed' : '';
+}
+function refreshTurnoverResetLock(){
+  updateResetLock($('#turnoverResetBtn'), turnoverUploadedAt,
+    'ล้างข้อมูลได้เฉพาะภายใน 1 ชั่วโมงหลังอัปโหลดเท่านั้น — ถ้าต้องการแก้ไขข้อมูลเก่ากว่านี้ กรุณาอัปโหลดไฟล์ D/O และ Stock ใหม่อีกครั้งแทนการล้างข้อมูล');
+}
+function refreshSOResetLock(){
+  updateResetLock($('#soResetBtn'), soUploadedAt,
+    'ล้างข้อมูลได้เฉพาะภายใน 1 ชั่วโมงหลังอัปโหลดเท่านั้น — ถ้าต้องการแก้ไขข้อมูลเก่ากว่านี้ กรุณาอัปโหลดไฟล์รายงาน SO Outstanding ใหม่อีกครั้งแทนการล้างข้อมูล');
+}
+// เช็คซ้ำทุกนาที เผื่อผู้ใช้เปิดหน้าทิ้งไว้นานข้ามเวลา 1 ชั่วโมงโดยไม่ได้รีเฟรชหน้า ปุ่มจะล็อกเองอัตโนมัติ
+setInterval(() => { refreshTurnoverResetLock(); refreshSOResetLock(); }, 60 * 1000);
 
 function setTurnoverUploadStatus(html, kind){
   const el = $('#turnoverUploadStatus');
@@ -4287,6 +4377,7 @@ async function saveTurnoverUploadToDb(result){
     uploaded_at: new Date().toISOString(),
     dashboard_ext: currentDashExt || null,
   };
+  turnoverUploadedAt = payload.uploaded_at; refreshTurnoverResetLock();
   let dbSaved = false;
   let dbErrorCode = null;
   let savedVia = null;
@@ -4319,6 +4410,7 @@ async function loadTurnoverUploadFromDb(){
     if(d) source = 'local';
   }
   if(!d || !d.turnover_rate_by_group || !d.monthly_stock_by_group) return;
+  turnoverUploadedAt = d.uploaded_at || null; refreshTurnoverResetLock();
   DATA.turnover_rate_by_group = TurnoverUpload.normalizeDays(d.turnover_rate_by_group);
   DATA.monthly_stock_by_group = d.monthly_stock_by_group;
   // v60: สร้างใหม่เป็น "ข้อมูลตั้งต้น + เฉพาะเดือนที่อัปโหลด" ทุกครั้งที่โหลด — ข้อมูลที่บันทึกไว้ก่อนหน้านี้เก็บตารางทั้งชุด
@@ -4660,6 +4752,7 @@ function initTurnoverResetButton(){
   if(!btn) return;
   const label = btn.textContent;
   let armed = false, timer = null;
+  refreshTurnoverResetLock();
   btn.addEventListener('click', async () => {
     if(!armed){
       armed = true;
@@ -4680,6 +4773,7 @@ function initTurnoverResetButton(){
     currentDashExt = null;
     applyDashboardExt(null);
     refreshDashboardAfterDataChange();
+    turnoverUploadedAt = null; refreshTurnoverResetLock();
     setTurnoverUploadStatus('ล้างข้อมูลที่อัปโหลดแล้ว — กลับไปใช้ข้อมูลตั้งต้น ม.ค.–ส.ค. 2569 (อัปโหลดไฟล์ใหม่ได้เลย)', 'muted');
   });
 }

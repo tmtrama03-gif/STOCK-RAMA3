@@ -150,22 +150,24 @@ select { padding-right: 6px; }
 .panel .ph .hint { margin: 0; }
 .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .grid2 > .wide { grid-column: 1 / -1; }
-/* แถวเด่น: กราฟ Day IC รายเดือน (กว้างกว่า) + Day IC เฉลี่ยรายกลุ่ม อยู่แถวเดียวกัน
-   ใช้ subgrid ให้หัวข้อ/คำอธิบาย/แถบสี/หัวข้อย่อย/จุดเริ่มกราฟของสองการ์ดตรงแนวเดียวกัน (เบราว์เซอร์ที่ไม่รองรับ → การ์ดสูงเท่ากันตามปกติ) */
-.heroC { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 14px; }
-.panel.hero { display: flex; flex-direction: column; border-top: 3px solid var(--blue); padding-top: 14px; }
+/* การ์ดกราฟเด่น (.hero): แถบน้ำเงินคาดบน โครงหัวข้อเหมือนกัน
+   คู่ "D/O และสต๊อก รายเดือน" + "Day IC เฉลี่ยรายกลุ่ม" อยู่แถวเดียวกัน (.heroC) ใช้ subgrid ให้หัวข้อ/คำอธิบาย/แถบสี/หัวข้อย่อย/จุดเริ่มกราฟตรงแนวเดียวกัน
+   (เบราว์เซอร์ที่ไม่รองรับ subgrid → การ์ดสูงเท่ากันตามปกติ) · จอแคบกว่า 900px เรียงซ้อนเป็นแนวตั้ง */
+.panel.hero { border-top: 3px solid var(--blue); padding-top: 14px; }
 .panel.hero .ph { flex-direction: column; align-items: flex-start; gap: 2px; margin-bottom: 8px; }
 .panel.hero .ph h2 { font-size: 17px; }
 .panel.hero .trend-key { margin-bottom: 0; }
 .panel.hero .sec-t { margin: 12px 0 4px; padding-top: 10px; border-top: 1px dashed var(--line); }
 .panel.hero .chart { margin-top: 2px; }
+.heroC { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 14px; }
+.heroC > .panel.hero { display: flex; flex-direction: column; }
 @supports (grid-template-rows: subgrid) {
   .heroC { grid-template-rows: auto auto auto 1fr; row-gap: 0; }
-  .panel.hero { display: grid; grid-row: span 4; grid-template-rows: subgrid; }
+  .heroC > .panel.hero { display: grid; grid-row: span 4; grid-template-rows: subgrid; }
 }
-@media (max-width: 1100px) {
+@media (max-width: 900px) {
   .heroC { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; row-gap: 14px; }
-  .panel.hero { display: flex; grid-row: auto; grid-template-rows: none; }
+  .heroC > .panel.hero { display: flex; grid-row: auto; grid-template-rows: none; }
 }
 
 /* charts */
@@ -1123,13 +1125,13 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
     if (isM) h += kpi('D/O ÷ สต๊อก', T.turns != null ? nf(T.turns, 2) : '–', 'เท่า', dlt(T.turns, P && P.turns, 'abs'));
     else h += kpi('D/O ÷ สต๊อก', T.winTurns != null ? nf(T.winTurns, 2) : '–', 'เท่า', '<span class="muted">D/O ' + rng + ' ÷ สต๊อก ' + C.monthShort(S.ym) + '</span>');
     h += '</div>';
-    /* แถวเด่น: Day IC รายเดือน (รวม) + Day IC เฉลี่ยรายกลุ่ม อยู่แถวเดียวกัน โครงการ์ดเหมือนกัน (หัวข้อ → คำอธิบาย → แถบสี → หัวข้อย่อย → กราฟ) */
+    /* แถวบน: Day IC รายเดือน (รวม) + กราฟย่อยรายกลุ่ม เต็มความกว้าง */
+    h += '<div class="panel hero"><div class="ph"><h2>Day IC รายเดือน</h2><span class="hint">Day IC = สต๊อกที่มีพอขายได้กี่วัน · ต่ำหรือสูงเกินเกณฑ์ = เฝ้าระวัง · คลิกที่กราฟเพื่อเลือกเดือน</span></div><div class="trend-key" id="lg-trend"></div><div class="sec-t"><h3 id="tt-total"></h3><span class="hint">ทุกเดือนที่มีข้อมูล</span></div><div class="chart" id="ch-trend"></div><div class="sec-t"><h3>แยกรายกลุ่ม</h3><span class="hint" id="tt-mini"></span></div><div class="trend-grid" id="ch-minis"></div></div>';
+    /* แถวคู่: D/O และสต๊อก รายเดือน + Day IC เฉลี่ยรายกลุ่ม อยู่แถวเดียวกัน โครงการ์ดเหมือนกัน (หัวข้อ → คำอธิบาย → แถบสี → หัวข้อย่อย → กราฟ) */
     h += '<div class="heroC">';
-    h += '<div class="panel hero"><div class="ph"><h2>Day IC รายเดือน</h2><span class="hint">Day IC = สต๊อกที่มีพอขายได้กี่วัน · คลิกที่กราฟเพื่อเลือกเดือน</span></div><div class="trend-key" id="lg-trend"></div><div class="sec-t"><h3 id="tt-total"></h3><span class="hint">ทุกเดือนที่มีข้อมูล</span></div><div class="chart" id="ch-trend"></div></div>';
+    h += '<div class="panel hero"><div class="ph"><h2>D/O และสต๊อก รายเดือน (ตัน)</h2><span class="hint">เทียบยอดจัดส่ง (D/O) กับสต๊อกสิ้นเดือนของแต่ละเดือน</span></div><div class="trend-key" id="lg-bars"><span class="k"><i class="kd" style="background:var(--do)"></i>D/O</span><span class="k"><i class="kd" style="background:var(--stk)"></i>สต๊อกสิ้นเดือน</span></div><div class="sec-t"><h3>เทียบรายเดือน</h3><span class="hint">หน่วย: ตัน</span></div><div class="chart" id="ch-bars"></div></div>';
     h += '<div class="panel hero"><div class="ph"><h2>' + (A ? 'Day IC เฉลี่ยรายกลุ่ม · ' + rangeLabel(A.yms) + ' ' + (+S.ym.slice(0, 4) + 543) : 'Day IC รายกลุ่ม · ' + C.ymLabel(S.ym)) + '</h2><span class="hint">เปรียบเทียบแต่ละกลุ่มสินค้าในช่วงที่เลือก</span></div><div class="trend-key" id="lg-groups"></div><div class="sec-t"><h3>จัดอันดับรายกลุ่ม</h3><span class="hint">เรียงจากต่ำสุด</span></div><div class="chart" id="ch-groups"></div></div>';
     h += '</div>';
-    h += '<div class="panel"><div class="ph"><h2>Day IC รายเดือน · แยกรายกลุ่ม</h2><span class="hint" id="tt-mini"></span></div><div class="trend-grid" id="ch-minis"></div></div>';
-    h += '<div class="panel"><div class="ph"><h2>D/O และสต๊อก รายเดือน (ตัน)</h2></div><div class="chart" id="ch-bars"></div><div class="legend"><span class="chip" style="border:0;padding:2px 4px"><i class="sw" style="background:var(--do)"></i>D/O</span><span class="chip" style="border:0;padding:2px 4px"><i class="sw" style="background:var(--stk)"></i>สต๊อกสิ้นเดือน</span></div></div>';
     h += '<div class="panel"><div class="ph"><h2>ตาราง Stock Turnover · ' + C.ymLabel(S.ym) + '</h2><span class="hint">' + BASIS[S.basis] + (S.basis === 'month' ? '' : ' (' + rangeLabel(cur.windowYms) + ')') + (A ? ' · Day IC เฉลี่ยของ ' + A.total.n + ' เดือน' : ' · เทียบกับ ' + C.ymLabel(prevYm)) + '</span></div><div class="scroll" id="tbl-main"></div></div>';
     h += '<div class="panel"><div class="ph"><h2>Day IC รายกลุ่ม × เดือน</h2><span class="hint">คลิกชื่อเดือนเพื่อดูเดือนนั้น · ส้ม ▼ = ต่ำกว่าเกณฑ์ · เหลือง ▲ = สูงกว่าเกณฑ์</span></div><div class="scroll" id="tbl-matrix"></div></div>';
     h += '<div class="row"><button class="btn" data-act="export">ส่งออกตารางเป็น Excel</button><span class="hint">ไฟล์รูปแบบเดียวกับรายงาน Turn Over เดิม (หน่วย กก.)</span></div>';
@@ -1347,7 +1349,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
   }
 
   function barChart(host, cats) {
-    var W = Math.max(300, host.clientWidth || 500), H = 260, mg = { t: 12, r: 8, b: 28, l: 44 }, n = cats.length;
+    var W = Math.max(300, host.clientWidth || 500), H = HERO_H + 2, mg = { t: 12, r: 8, b: 28, l: 44 }, n = cats.length;   /* สูงเท่ากราฟแท่งแนวนอนที่อยู่ข้างกัน */
     var iw = W - mg.l - mg.r, ih = H - mg.t - mg.b, mx = 0;
     cats.forEach(function (c) { if (c.a > mx) mx = c.a; if (c.b > mx) mx = c.b; });
     var ax = axis(mx || 1), band = iw / Math.max(n, 1), bw = Math.max(4, Math.min(band > 90 ? 34 : 22, (band - 8) / 2 - 1));

@@ -93,8 +93,10 @@ h1 { font-size: 26px; letter-spacing: .01em; line-height: 1.15; }
 .dot.stk { background: var(--stk); }
 
 /* tabs */
-.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); overflow-x: auto; }
-.tab { background: none; border: 0; padding: 10px 16px; color: var(--ink-3); font-weight: 500; border-bottom: 3px solid transparent; margin-bottom: -1px; white-space: nowrap; }
+/* เส้นใต้ทำด้วย inset shadow แทน border+margin ติดลบ (เดิมล้นกรอบ 1px จนมีแถบเลื่อนแนวตั้งโผล่) · ซ่อนแถบเลื่อน แต่ยังปัดซ้าย-ขวาบนมือถือได้ */
+.tabs { display: flex; gap: 4px; box-shadow: inset 0 -1px 0 var(--line); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; width: 0; height: 0; }
+.tab { background: none; border: 0; padding: 10px 16px; color: var(--ink-3); font-weight: 500; border-bottom: 3px solid transparent; white-space: nowrap; }
 .tab:hover { color: var(--ink); }
 .tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--yellow); }
 
@@ -148,6 +150,23 @@ select { padding-right: 6px; }
 .panel .ph .hint { margin: 0; }
 .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .grid2 > .wide { grid-column: 1 / -1; }
+/* แถวเด่น: กราฟ Day IC รายเดือน (กว้างกว่า) + Day IC เฉลี่ยรายกลุ่ม อยู่แถวเดียวกัน
+   ใช้ subgrid ให้หัวข้อ/คำอธิบาย/แถบสี/หัวข้อย่อย/จุดเริ่มกราฟของสองการ์ดตรงแนวเดียวกัน (เบราว์เซอร์ที่ไม่รองรับ → การ์ดสูงเท่ากันตามปกติ) */
+.heroC { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 14px; }
+.panel.hero { display: flex; flex-direction: column; border-top: 3px solid var(--blue); padding-top: 14px; }
+.panel.hero .ph { flex-direction: column; align-items: flex-start; gap: 2px; margin-bottom: 8px; }
+.panel.hero .ph h2 { font-size: 17px; }
+.panel.hero .trend-key { margin-bottom: 0; }
+.panel.hero .sec-t { margin: 12px 0 4px; padding-top: 10px; border-top: 1px dashed var(--line); }
+.panel.hero .chart { margin-top: 2px; }
+@supports (grid-template-rows: subgrid) {
+  .heroC { grid-template-rows: auto auto auto 1fr; row-gap: 0; }
+  .panel.hero { display: grid; grid-row: span 4; grid-template-rows: subgrid; }
+}
+@media (max-width: 1100px) {
+  .heroC { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; row-gap: 14px; }
+  .panel.hero { display: flex; grid-row: auto; grid-template-rows: none; }
+}
 
 /* charts */
 .chart { position: relative; width: 100%; }
@@ -507,9 +526,14 @@ var Core = (function () {
     var months = {}, excluded = { kg: 0, lines: 0 }, nogroup = { kg: 0, lines: 0 }, groupDesc = {}, items = 0;
     var step = paired ? 2 : 1;
     i = hi + step;
+    var lastGi = null;
     while (i < rows.length) {
       r = rows[i];
       var gi = r ? parseDate(r[GI]) : null;
+      if (gi) lastGi = gi;
+      // รายงานแถวเดียวต่อรายการที่ SAP แสดงวันที่เฉพาะแถวแรกของวัน (วันที่ซ้ำเว้นว่าง) → ใช้วันที่ของแถวก่อนหน้า
+      // ใช้เฉพาะแถวรายการจริง (มีรหัสสินค้า + รหัสกลุ่มสินค้า) ไม่นับแถวรวม/แถวหัวรายงาน
+      else if (!paired && lastGi && r && code(r[MAT]) && isGroupCode(code(r[GRP]))) gi = lastGi;
       if (!gi) { i++; continue; }
       var r2 = paired ? (rows[i + 1] || []) : r;
       var ym = gi.slice(0, 7);
@@ -637,6 +661,29 @@ var Core = (function () {
       return { error: 'notstock' };
     }
     return best;
+  }
+
+  // ไฟล์รวมหลายเดือน (ชีทละเดือน ชื่อชีทบอกเดือน เช่น "ม.ค. 2569") → [{p, ym, asOf}] เรียงตามเดือน
+  // คืน null เมื่อพบไม่ถึง 2 เดือน (ไฟล์เดือนเดียว ใช้ parseStockWorkbook เหมือนเดิม)
+  function parseStockMonths(sheets) {
+    var by = {}, cnt = 0;
+    (sheets || []).forEach(function (s) {
+      var det = detectStockDate([s.name]);
+      if (!det) return;
+      var p = parseStockSheet(s.rows || []);
+      if (!p) return;
+      p.sheet = s.name;
+      var asOf = null, head = (s.rows || []).slice(0, 4);   // บรรทัดบนของชีทมักบอกไฟล์ต้นฉบับ/วันที่สิ้นเดือน
+      for (var i = 0; i < head.length && !asOf; i++) {
+        var d2 = detectStockDate([(head[i] || []).join(' ')]);
+        if (d2 && d2.asOf && d2.ym === det.ym) asOf = d2.asOf;
+      }
+      var cur = by[det.ym];
+      if (!cur) { by[det.ym] = { p: p, ym: det.ym, asOf: asOf }; cnt++; }
+      else if ((cur.p.pivot && !p.pivot) || (cur.p.pivot === p.pivot && p.lines > cur.p.lines)) by[det.ym] = { p: p, ym: det.ym, asOf: asOf };
+    });
+    if (cnt < 2) return null;
+    return Object.keys(by).sort().map(function (k) { return by[k]; });
   }
 
   // เดือน/วันที่ของสต๊อกจากชื่อชีท/ชื่อไฟล์ → {ym, asOf|null} หรือ null
@@ -796,7 +843,7 @@ var Core = (function () {
   return {
     TH_MONTHS: TH_MONTHS, TH_MONTH_FULL: TH_MONTH_FULL, DEFAULT_DAYS: DEFAULT_DAYS, MAIN_GROUPS: MAIN_GROUPS, EXCLUDED: EXCLUDED, GROUP_NAMES: GROUP_NAMES,
     norm: norm, num: num, pad: pad, round: round, parseDate: parseDate, ymOf: ymOf, ymLabel: ymLabel, monthShort: monthShort, addMonths: addMonths, daysInMonth: daysInMonth,
-    parseDo: parseDo, parseStockSheet: parseStockSheet, parseStockWorkbook: parseStockWorkbook, detectStockDate: detectStockDate,
+    parseDo: parseDo, parseStockSheet: parseStockSheet, parseStockWorkbook: parseStockWorkbook, parseStockMonths: parseStockMonths, detectStockDate: detectStockDate,
     daysFor: daysFor, windowYms: windowYms, monthMetrics: monthMetrics, avgDayIC: avgDayIC, itemMetrics: itemMetrics, moverMetrics: moverMetrics, groupName: groupName
   };
 })();
@@ -1076,11 +1123,13 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
     if (isM) h += kpi('D/O ÷ สต๊อก', T.turns != null ? nf(T.turns, 2) : '–', 'เท่า', dlt(T.turns, P && P.turns, 'abs'));
     else h += kpi('D/O ÷ สต๊อก', T.winTurns != null ? nf(T.winTurns, 2) : '–', 'เท่า', '<span class="muted">D/O ' + rng + ' ÷ สต๊อก ' + C.monthShort(S.ym) + '</span>');
     h += '</div>';
-    h += '<div class="grid2">';
-    h += '<div class="panel wide"><div class="ph"><h2>Day IC รายเดือน</h2><span class="hint">Day IC = สต๊อกที่มีพอขายได้กี่วัน · ต่ำหรือสูงเกินเกณฑ์ = เฝ้าระวัง · คลิกที่กราฟเพื่อเลือกเดือน</span></div><div class="trend-key" id="lg-trend"></div><div class="sec-t"><h3 id="tt-total"></h3></div><div class="chart" id="ch-trend"></div><div class="sec-t"><h3>แยกรายกลุ่ม</h3><span class="hint" id="tt-mini"></span></div><div class="trend-grid" id="ch-minis"></div></div>';
-    h += '<div class="panel"><div class="ph"><h2>D/O และสต๊อก รายเดือน (ตัน)</h2></div><div class="chart" id="ch-bars"></div><div class="legend"><span class="chip" style="border:0;padding:2px 4px"><i class="sw" style="background:var(--do)"></i>D/O</span><span class="chip" style="border:0;padding:2px 4px"><i class="sw" style="background:var(--stk)"></i>สต๊อกสิ้นเดือน</span></div></div>';
-    h += '<div class="panel"><div class="ph"><h2>' + (A ? 'Day IC เฉลี่ยรายกลุ่ม · ' + rangeLabel(A.yms) + ' ' + (+S.ym.slice(0, 4) + 543) : 'Day IC รายกลุ่ม · ' + C.ymLabel(S.ym)) + '</h2><span class="hint">เรียงจากต่ำสุด · ส้ม ▼ = ต่ำกว่าเกณฑ์ · เหลือง ▲ = สูงกว่าเกณฑ์</span></div><div class="chart" id="ch-groups"></div></div>';
+    /* แถวเด่น: Day IC รายเดือน (รวม) + Day IC เฉลี่ยรายกลุ่ม อยู่แถวเดียวกัน โครงการ์ดเหมือนกัน (หัวข้อ → คำอธิบาย → แถบสี → หัวข้อย่อย → กราฟ) */
+    h += '<div class="heroC">';
+    h += '<div class="panel hero"><div class="ph"><h2>Day IC รายเดือน</h2><span class="hint">Day IC = สต๊อกที่มีพอขายได้กี่วัน · คลิกที่กราฟเพื่อเลือกเดือน</span></div><div class="trend-key" id="lg-trend"></div><div class="sec-t"><h3 id="tt-total"></h3><span class="hint">ทุกเดือนที่มีข้อมูล</span></div><div class="chart" id="ch-trend"></div></div>';
+    h += '<div class="panel hero"><div class="ph"><h2>' + (A ? 'Day IC เฉลี่ยรายกลุ่ม · ' + rangeLabel(A.yms) + ' ' + (+S.ym.slice(0, 4) + 543) : 'Day IC รายกลุ่ม · ' + C.ymLabel(S.ym)) + '</h2><span class="hint">เปรียบเทียบแต่ละกลุ่มสินค้าในช่วงที่เลือก</span></div><div class="trend-key" id="lg-groups"></div><div class="sec-t"><h3>จัดอันดับรายกลุ่ม</h3><span class="hint">เรียงจากต่ำสุด</span></div><div class="chart" id="ch-groups"></div></div>';
     h += '</div>';
+    h += '<div class="panel"><div class="ph"><h2>Day IC รายเดือน · แยกรายกลุ่ม</h2><span class="hint" id="tt-mini"></span></div><div class="trend-grid" id="ch-minis"></div></div>';
+    h += '<div class="panel"><div class="ph"><h2>D/O และสต๊อก รายเดือน (ตัน)</h2></div><div class="chart" id="ch-bars"></div><div class="legend"><span class="chip" style="border:0;padding:2px 4px"><i class="sw" style="background:var(--do)"></i>D/O</span><span class="chip" style="border:0;padding:2px 4px"><i class="sw" style="background:var(--stk)"></i>สต๊อกสิ้นเดือน</span></div></div>';
     h += '<div class="panel"><div class="ph"><h2>ตาราง Stock Turnover · ' + C.ymLabel(S.ym) + '</h2><span class="hint">' + BASIS[S.basis] + (S.basis === 'month' ? '' : ' (' + rangeLabel(cur.windowYms) + ')') + (A ? ' · Day IC เฉลี่ยของ ' + A.total.n + ' เดือน' : ' · เทียบกับ ' + C.ymLabel(prevYm)) + '</span></div><div class="scroll" id="tbl-main"></div></div>';
     h += '<div class="panel"><div class="ph"><h2>Day IC รายกลุ่ม × เดือน</h2><span class="hint">คลิกชื่อเดือนเพื่อดูเดือนนั้น · ส้ม ▼ = ต่ำกว่าเกณฑ์ · เหลือง ▲ = สูงกว่าเกณฑ์</span></div><div class="scroll" id="tbl-matrix"></div></div>';
     h += '<div class="row"><button class="btn" data-act="export">ส่งออกตารางเป็น Excel</button><span class="hint">ไฟล์รูปแบบเดียวกับรายงาน Turn Over เดิม (หน่วย กก.)</span></div>';
@@ -1142,6 +1191,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
     return 'M' + x + ',' + (y + h) + 'V' + (y + r) + 'Q' + x + ',' + y + ' ' + (x + r) + ',' + y + 'H' + (x + w - r) + 'Q' + (x + w) + ',' + y + ' ' + (x + w) + ',' + (y + r) + 'V' + (y + h) + 'Z';
   }
 
+  var HERO_H = 240;   /* ความสูงกราฟในแถวเด่น (px) ใช้ร่วมกันทั้งกราฟเส้นและกราฟแท่งแนวนอน */
   function drawCharts(groups, cur, A) {
     if (S.tab !== 'overview' || !$('#ch-trend')) return;
     var Y = S.ym.slice(0, 4), yms = [], m;
@@ -1152,8 +1202,10 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
     var lo = S.cfg.warnLow, hi = S.cfg.warnHigh, tv = mm.map(function (x) { return x.total.dayIC; });
     var tmax = Math.max.apply(null, tv.filter(function (v) { return v != null; }).concat([0]));
     $('#tt-total').textContent = 'รวม ' + groups.length + ' กลุ่ม';
-    trendChart($('#ch-trend'), cats, tv, { name: 'รวม ' + groups.length + ' กลุ่ม', H: 240, ymax: niceTop(Math.max(tmax, hi * 1.12)), sel: selI, bg: 'var(--surface)', labels: 'ext' });
-    $('#lg-trend').innerHTML = '<span class="k"><i class="kd" style="background:var(--blue)"></i>อยู่ในเกณฑ์</span><span class="k"><i class="kd" style="background:var(--hi)"></i>▼ ต่ำกว่า ' + nf(lo, 1) + ' วัน</span><span class="k"><i class="kd" style="background:var(--lo)"></i>▲ สูงกว่า ' + nf(hi, 1) + ' วัน</span><span class="k"><i class="kl"></i><i class="kl h"></i>เส้นเกณฑ์เฝ้าระวัง</span><span class="k"><i class="kr"></i>เดือนที่เลือก</span>';
+    trendChart($('#ch-trend'), cats, tv, { name: 'รวม ' + groups.length + ' กลุ่ม', H: HERO_H, ymax: niceTop(Math.max(tmax, hi * 1.12)), sel: selI, bg: 'var(--surface)', labels: 'ext' });
+    var keyBase = '<span class="k"><i class="kd" style="background:var(--blue)"></i>อยู่ในเกณฑ์</span><span class="k"><i class="kd" style="background:var(--hi)"></i>▼ ต่ำกว่า ' + nf(lo, 1) + ' วัน</span><span class="k"><i class="kd" style="background:var(--lo)"></i>▲ สูงกว่า ' + nf(hi, 1) + ' วัน</span>';
+    $('#lg-trend').innerHTML = keyBase + '<span class="k"><i class="kl"></i><i class="kl h"></i>เส้นเกณฑ์เฝ้าระวัง</span><span class="k"><i class="kr"></i>เดือนที่เลือก</span>';
+    if ($('#lg-groups')) $('#lg-groups').innerHTML = keyBase;   /* เส้นเกณฑ์ในกราฟแท่งมีป้ายกำกับบนกราฟอยู่แล้ว */
     if (groups.length <= 12) { var yM = drawMinis($('#ch-minis'), groups, mm, cats, selI); $('#tt-mini').textContent = 'สเกลเท่ากันทุกกลุ่ม (0–' + nf(yM, 0) + ' วัน)'; }
     else { $('#ch-minis').innerHTML = '<div class="hint">เลือกไม่เกิน 12 กลุ่มเพื่อดูกราฟรายกลุ่ม</div>'; $('#tt-mini').textContent = ''; }
     /* bars */
@@ -1298,7 +1350,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
     var W = Math.max(300, host.clientWidth || 500), H = 260, mg = { t: 12, r: 8, b: 28, l: 44 }, n = cats.length;
     var iw = W - mg.l - mg.r, ih = H - mg.t - mg.b, mx = 0;
     cats.forEach(function (c) { if (c.a > mx) mx = c.a; if (c.b > mx) mx = c.b; });
-    var ax = axis(mx || 1), band = iw / Math.max(n, 1), bw = Math.max(4, Math.min(22, (band - 8) / 2 - 1));
+    var ax = axis(mx || 1), band = iw / Math.max(n, 1), bw = Math.max(4, Math.min(band > 90 ? 34 : 22, (band - 8) / 2 - 1));
     var Yp = function (v) { return mg.t + ih - v / ax.max * ih; };
     var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="กราฟแท่ง D/O และสต๊อกรายเดือน">';
     ax.ticks.forEach(function (t) { s += '<line class="grid" x1="' + mg.l + '" x2="' + (W - mg.r) + '" y1="' + Yp(t) + '" y2="' + Yp(t) + '"/><text class="ax" x="' + (mg.l - 8) + '" y="' + (Yp(t) + 4) + '" text-anchor="end">' + nf(t, 0) + '</text>'; });
@@ -1325,17 +1377,18 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
 
   function hbarChart(host, rows, noDo) {
     if (!rows.length) { host.innerHTML = '<div class="muted" style="padding:20px 0">เดือนนี้ยังคำนวณ Day IC รายกลุ่มไม่ได้ (ต้องมีทั้ง D/O และสต๊อก)</div>'; return; }
-    var W = Math.max(300, host.clientWidth || 500), rh = 30, H = rows.length * rh + 26, nameW = Math.min(150, W * 0.36), valW = 62;
+    /* ความสูงแถวปรับให้กราฟรวมสูงใกล้เคียงกราฟเส้น Day IC รายเดือน (240px) ที่อยู่ข้างกัน: 6 กลุ่ม → ~36px/แถว, กลุ่มมากขึ้นลดลงถึง 30px */
+    var W = Math.max(300, host.clientWidth || 500), rh = Math.max(30, Math.min(44, Math.round((HERO_H - 26) / rows.length))), H = rows.length * rh + 26, nameW = Math.min(150, W * 0.36), valW = 62;
     var mx = Math.max(S.cfg.warnHigh * 1.05, Math.max.apply(null, rows.map(function (r) { return r.v; })), 1), ax = axis(mx), x0 = nameW + 8, bw = W - x0 - valW;
     var X = function (v) { return x0 + v / ax.max * bw; };
     var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="กราฟแท่งแนวนอน Day IC รายกลุ่ม">';
     s += '<line x1="' + X(S.cfg.warnLow) + '" x2="' + X(S.cfg.warnLow) + '" y1="0" y2="' + (H - 18) + '" stroke="var(--hi)" stroke-dasharray="5 4"/><text class="ax" x="' + (X(S.cfg.warnLow) + 4) + '" y="' + (H - 4) + '" text-anchor="end">▼ ต่ำ ' + nf(S.cfg.warnLow, 1) + '</text>';
     s += '<line x1="' + X(S.cfg.warnHigh) + '" x2="' + X(S.cfg.warnHigh) + '" y1="0" y2="' + (H - 18) + '" stroke="var(--lo)" stroke-dasharray="5 4"/><text class="ax" x="' + (X(S.cfg.warnHigh) - 4) + '" y="' + (H - 4) + '" text-anchor="start">▲ สูง ' + nf(S.cfg.warnHigh, 1) + '</text>';
     rows.forEach(function (r, i) {
-      var y = 6 + i * rh, st = stateOf(r.v), col = st ? stColor(st) : 'var(--ok)';
-      s += '<text class="axl" x="' + nameW + '" y="' + (y + 15) + '" text-anchor="end">' + esc(r.name.length > 16 ? r.name.slice(0, 15) + '…' : r.name) + '</text>';
-      s += '<path d="M' + x0 + ',' + (y + 4) + 'H' + Math.max(x0 + 2, X(r.v) - 4) + 'Q' + X(r.v) + ',' + (y + 4) + ' ' + X(r.v) + ',' + (y + 8) + 'V' + (y + 16) + 'Q' + X(r.v) + ',' + (y + 20) + ' ' + Math.max(x0 + 2, X(r.v) - 4) + ',' + (y + 20) + 'H' + x0 + 'Z" style="fill:' + col + '"/>';
-      s += '<text class="axl num" x="' + (X(r.v) + 6) + '" y="' + (y + 16) + '" style="paint-order:stroke;stroke:var(--surface);stroke-width:3px;stroke-linejoin:round">' + nf(r.v, 2) + (st === 'lo' ? ' ▼' : st === 'hi' ? ' ▲' : '') + '</text>';
+      var y = 6 + i * rh, bt = y + (rh - 16) / 2, st = stateOf(r.v), col = st ? stColor(st) : 'var(--ok)';   /* แท่งหนา 16px กึ่งกลางแถว */
+      s += '<text class="axl" x="' + nameW + '" y="' + (bt + 12) + '" text-anchor="end">' + esc(r.name.length > 16 ? r.name.slice(0, 15) + '…' : r.name) + '</text>';
+      s += '<path d="M' + x0 + ',' + bt + 'H' + Math.max(x0 + 2, X(r.v) - 4) + 'Q' + X(r.v) + ',' + bt + ' ' + X(r.v) + ',' + (bt + 4) + 'V' + (bt + 12) + 'Q' + X(r.v) + ',' + (bt + 16) + ' ' + Math.max(x0 + 2, X(r.v) - 4) + ',' + (bt + 16) + 'H' + x0 + 'Z" style="fill:' + col + '"/>';
+      s += '<text class="axl num" x="' + (X(r.v) + 6) + '" y="' + (bt + 12.5) + '" style="paint-order:stroke;stroke:var(--surface);stroke-width:3px;stroke-linejoin:round">' + nf(r.v, 2) + (st === 'lo' ? ' ▼' : st === 'hi' ? ' ▲' : '') + '</text>';
       s += '<rect class="hb" data-i="' + i + '" x="0" y="' + y + '" width="' + W + '" height="' + rh + '" fill="transparent"/>';
     });
     s += '</svg><div class="tip" style="display:none"></div>';
@@ -1579,11 +1632,19 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
     for (var i = 0; i < files.length; i++) {
       var f = files[i];
       try {
-        var sheets = await readFile(f), p = C.parseStockWorkbook(sheets);
-        if (p.error) { S.msgs.stock.push({ k: 'err', t: f.name + ': ' + errText(p, 'stock') }); continue; }
-        var det = C.detectStockDate([p.sheet, f.name]);
-        S.staged.stock.push({ id: ++S.stockSeq, src: f.name, p: p, ym: det ? det.ym : '', asOf: det ? det.asOf : null, include: true });
-        S.msgs.stock.push({ k: det ? 'ok' : 'err', t: f.name + ': พบ ' + nf(p.lines) + ' แถว (ชีท ' + p.sheet + ')' + (det ? '' : ' · ไม่พบเดือนในชื่อชีท/ไฟล์ กรุณาเลือกเดือนเอง') });
+        var sheets = await readFile(f), multi = C.parseStockMonths(sheets);
+        if (multi) {   // ไฟล์รวมหลายเดือน: ชีทละเดือน → แตกเป็นหลายรายการรอบันทึก
+          multi.forEach(function (e) { S.staged.stock.push({ id: ++S.stockSeq, src: f.name, p: e.p, ym: e.ym, asOf: e.asOf, include: true }); });
+          S.msgs.stock.push({ k: 'ok', t: f.name + ': พบสต๊อก ' + multi.length + ' เดือน (' + C.ymLabel(multi[0].ym) + ' – ' + C.ymLabel(multi[multi.length - 1].ym) + ') ในไฟล์เดียว ตรวจรายการด้านล่างแล้วกดบันทึก' });
+        } else {
+          var p = C.parseStockWorkbook(sheets);
+          if (p.error) { S.msgs.stock.push({ k: 'err', t: f.name + ': ' + errText(p, 'stock') }); }
+          else {
+            var det = C.detectStockDate([p.sheet, f.name]);
+            S.staged.stock.push({ id: ++S.stockSeq, src: f.name, p: p, ym: det ? det.ym : '', asOf: det ? det.asOf : null, include: true });
+            S.msgs.stock.push({ k: det ? 'ok' : 'err', t: f.name + ': พบ ' + nf(p.lines) + ' แถว (ชีท ' + p.sheet + ')' + (det ? '' : ' · ไม่พบเดือนในชื่อชีท/ไฟล์ กรุณาเลือกเดือนเอง') });
+          }
+        }
       } catch (e) { S.msgs.stock.push({ k: 'err', t: f.name + ': ' + errText(e, 'stock') }); }
       renderUpdate(); await tick();
     }

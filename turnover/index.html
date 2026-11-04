@@ -896,7 +896,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
     tab: 'overview', canWrite: null, db: null, user: null, dbState: 'connecting',
     staged: { do: {}, stock: [] }, msgs: { do: [], stock: [], save: [] }, busy: { do: false, stock: false, save: false },
     items: { q: '', sort: 'default', min: '', limit: 40, edit: null }, confirmDel: null, stockSeq: 0,
-    bk: { msgs: [], restore: null, confirm: false, busy: false, t: 0 }
+    bk: { msgs: [], restore: null, confirm: false, busy: false, t: 0 }, ymAuto: true
   };
   try { var pf = JSON.parse(localStorage.getItem('st-prefs') || '{}'); if (BASIS[pf.basis]) S.basis = pf.basis; if (pf.scope === 'main' || pf.scope === 'all') S.scope = pf.scope; } catch (e) { }
   function savePrefs() { try { localStorage.setItem('st-prefs', JSON.stringify({ basis: S.basis, scope: S.scope })); } catch (e) { } }
@@ -1001,7 +1001,9 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
   }
   function afterData() {
     var yms = allYms();
-    if (!S.ym || (yms.indexOf(S.ym) < 0 && yms.length)) S.ym = defaultYm();
+    /* เดือนตั้งต้น = เดือนล่าสุดที่มีทั้ง D/O และสต๊อก — คำนวณใหม่ทุกครั้งที่ข้อมูลเข้า จนกว่าผู้ใช้จะเลือกเดือนเอง
+       (D/O มักโหลดมาก่อนสต๊อกเล็กน้อย ถ้าไม่คำนวณใหม่จะค้างที่เดือนล่าสุดของ D/O ซึ่งอาจยังไม่มีสต๊อก) */
+    if (S.ymAuto || !S.ym || (yms.indexOf(S.ym) < 0 && yms.length)) S.ym = defaultYm();
     renderAll();
   }
 
@@ -1348,7 +1350,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
     }
     hit.addEventListener('pointermove', move); hit.addEventListener('pointerdown', move);
     hit.addEventListener('pointerleave', function () { tip.style.display = 'none'; xh.style.display = 'none'; });
-    hit.addEventListener('click', function (ev) { var i = idx(ev); if (cats[i] && cats[i].k !== S.ym) { S.ym = cats[i].k; renderAll(); } });
+    hit.addEventListener('click', function (ev) { var i = idx(ev); if (cats[i] && cats[i].k !== S.ym) { S.ymAuto = false; S.ym = cats[i].k; renderAll(); } });
   }
 
   function drawMinis(host, groups, mm, cats, selI) {
@@ -1481,7 +1483,10 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
     var host = $('#view-items');
     if (!ready()) { host.innerHTML = '<div class="panel"><div class="empty muted">กำลังโหลดข้อมูล…</div></div>'; return; }
     if (!S.ym || !S.stockDocs[S.ym]) {
-      host.innerHTML = '<div class="panel"><div class="empty"><h2>เดือนนี้ยังไม่มีข้อมูลสต๊อก</h2><div>เลือกเดือนที่มีข้อมูลที่หน้า “ภาพรวม” หรืออัปโหลดสต๊อกของเดือนนี้</div><button class="btn" data-tab-go="overview">ไปหน้าภาพรวม</button></div></div>';
+      var lastSt = Object.keys(S.stockDocs).sort().pop();       // เดือนล่าสุดที่มีสต๊อก → ปุ่มลัด
+      host.innerHTML = '<div class="panel"><div class="empty"><h2>' + (S.ym ? esc(C.ymLabel(S.ym)) + ' ยังไม่มีข้อมูลสต๊อก' : 'เดือนนี้ยังไม่มีข้อมูลสต๊อก') + '</h2><div>เลือกเดือนที่มีข้อมูลที่หน้า “ภาพรวม” หรืออัปโหลดสต๊อกของเดือนนี้ที่แท็บ “อัปเดตข้อมูล”</div><div class="row" style="justify-content:center;margin-top:12px">' +
+        (lastSt ? '<button class="btn primary" data-ym="' + lastSt + '">ดูรายการสินค้า ' + esc(C.ymLabel(lastSt)) + '</button>' : '') +
+        '<button class="btn" data-tab-go="overview">ไปหน้าภาพรวม</button></div></div></div>';
       return;
     }
     var gs = {}; selGroups().forEach(function (g) { gs[g] = 1; });
@@ -1849,7 +1854,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
     if (t.hasAttribute('data-editnm')) { S.items.edit = t.getAttribute('data-editnm'); renderItems(); return; }
     if (t.hasAttribute('data-tab')) { setTab(t.getAttribute('data-tab')); return; }
     if (t.hasAttribute('data-tab-go')) { setTab(t.getAttribute('data-tab-go')); return; }
-    if (t.hasAttribute('data-ym') && !t.disabled) { S.ym = t.getAttribute('data-ym'); renderAll(); return; }
+    if (t.hasAttribute('data-ym') && !t.disabled) { S.ymAuto = false; S.ym = t.getAttribute('data-ym'); renderAll(); return; }
     if (t.hasAttribute('data-scope')) { S.scope = t.getAttribute('data-scope'); S.sel = null; savePrefs(); renderAll(); return; }
     if (t.hasAttribute('data-g')) {
       var g = t.getAttribute('data-g'), all = scopeGroups(), cur = S.sel ? new Set(S.sel) : new Set(all);
@@ -1910,7 +1915,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
   });
   document.addEventListener('change', function (ev) {
     var t = ev.target;
-    if (t.id === 'yearSel') { var y = t.value, yms = allYms().filter(function (k) { return k.slice(0, 4) === y; }); S.ym = yms.length ? yms[yms.length - 1] : y + '-01'; renderAll(); }
+    if (t.id === 'yearSel') { var y = t.value, yms = allYms().filter(function (k) { return k.slice(0, 4) === y; }); S.ymAuto = false; S.ym = yms.length ? yms[yms.length - 1] : y + '-01'; renderAll(); }
     else if (t.id === 'basisSel') { S.basis = t.value; savePrefs(); renderAll(); }
     else if (t.hasAttribute('data-nm')) {
       var code = t.getAttribute('data-nm'), nm = t.value.trim().replace(/\s+/g, ' ');

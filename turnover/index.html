@@ -229,6 +229,11 @@ td.tu { font-weight: 600; color: var(--accent-text); }
 .lnk:hover { color: var(--accent-text); }
 .tag.lo { border-color: var(--hi); color: var(--accent-text); }
 .tag.dead { border-color: var(--danger); color: var(--danger); }
+.stsub { font-size: 11.5px; color: var(--ink-3); margin-top: 3px; white-space: nowrap; }
+.stlegend { line-height: 2; margin-bottom: 8px; }
+#itemsTable .row .field { min-width: 0; max-width: 100%; }
+#itemsTable .row .field select { min-width: 0; max-width: 100%; text-overflow: ellipsis; }
+@media (max-width: 640px) { #itemsTable .row .field { flex: 1 1 100%; } #itemsTable .row .field select, #itemsTable .row .field .inp { flex: 1 1 auto; min-width: 0; } }
 .cell-heat { border-radius: 6px; }
 .mxh { background: none; border: 0; color: var(--ink-3); font-size: 12px; padding: 0; }
 .mxh:hover, .mxh[aria-pressed="true"] { color: var(--yellow); }
@@ -815,18 +820,33 @@ var Core = (function () {
     });
     var allDesc = buildAllDesc(st);
     var man = (st.cfg && st.cfg.itemNames) || {};     // ชื่อที่ผู้ใช้พิมพ์เอง (ใช้ก่อนชื่อจากไฟล์)
+    var lastDo = {};                                  // เดือนล่าสุดที่รายการมี D/O (ไม่เกินเดือน ym ที่ดูอยู่ — ไม่จำกัดเฉพาะช่วงที่เลือก)
+    Object.keys(st.doDocs).sort().forEach(function (x) {
+      if (x > ym) return;
+      (st.doDocs[x].mats || []).forEach(function (m) { if (m[2] > 0) lastDo[m[0]] = x; });
+    });
     var items = [], noDesc = 0;
     (stDoc.mats || []).forEach(function (m) {
       if (groupsSet && !groupsSet[m[1]]) return;
       var d = doKg[m[0]] || 0;
       if (!(man[m[0]] || m[4] || desc[m[0]] || allDesc[m[0]])) noDesc++;
       var qd = days > 0 && win.length ? d / days : null;
+      var ic = (qd && qd > 0) ? m[2] / qd : null;
       items.push({
         m: m[0], g: m[1], desc: man[m[0]] || m[4] || desc[m[0]] || allDesc[m[0]] || '', manual: !!man[m[0]], stockKg: m[2], stockPcs: m[3] || 0, doKg: d, doPcs: doPcs[m[0]] || 0, qtyDay: qd,
-        dayIC: (qd && qd > 0) ? m[2] / qd : null, noDo: win.length > 0 && d <= 0
+        dayIC: ic, noDo: win.length > 0 && d <= 0, lastDo: lastDo[m[0]] || null, speed: speedOf(ic, win.length > 0 && d <= 0)
       });
     });
     return { items: items, windowYms: win, days: days, hasStock: true, noDesc: noDesc };
+  }
+
+  // ระดับการเคลื่อนไหวของสินค้า จาก Day IC (วันทำงานที่สต๊อกสิ้นเดือนจะหมดถ้าขายด้วยอัตราเฉลี่ยของช่วงที่เลือก)
+  //  ok = เคลื่อนไหว (≤ 90 วัน) · slow = ช้า (91–180) · stuck = ช้ามาก/ค้าง (> 180) · nodo = ไม่มี D/O ในช่วงนี้ · null = ไม่มีข้อมูลให้คิด
+  var SLOW_MID = 90, SLOW_HIGH = 180;
+  function speedOf(dayIC, noDo) {
+    if (noDo) return 'nodo';
+    if (dayIC == null || !isFinite(dayIC)) return null;
+    return dayIC > SLOW_HIGH ? 'stuck' : dayIC > SLOW_MID ? 'slow' : 'ok';
   }
 
   // ชื่อสินค้า: ไฟล์สต๊อกส่วนใหญ่ไม่มีคอลัมน์ชื่อ จึงหาจากรายงาน D/O และสต๊อกทุกเดือนที่มี (เดือนล่าสุดก่อน)
@@ -956,7 +976,7 @@ var Core = (function () {
     norm: norm, num: num, pad: pad, round: round, parseDate: parseDate, ymOf: ymOf, ymLabel: ymLabel, monthShort: monthShort, addMonths: addMonths, daysInMonth: daysInMonth,
     parseDo: parseDo, parseStockSheet: parseStockSheet, parseStockWorkbook: parseStockWorkbook, parseStockMonths: parseStockMonths, detectStockDate: detectStockDate,
     BACKUP_APP: BACKUP_APP, parseBackup: parseBackup,
-    daysFor: daysFor, windowYms: windowYms, monthMetrics: monthMetrics, avgDayIC: avgDayIC, itemMetrics: itemMetrics, moverMetrics: moverMetrics, bestByGroup: bestByGroup, groupName: groupName
+    daysFor: daysFor, windowYms: windowYms, monthMetrics: monthMetrics, avgDayIC: avgDayIC, itemMetrics: itemMetrics, moverMetrics: moverMetrics, bestByGroup: bestByGroup, speedOf: speedOf, SLOW_MID: SLOW_MID, SLOW_HIGH: SLOW_HIGH, groupName: groupName
   };
 })();
 if (typeof module !== 'undefined' && module.exports) module.exports = Core;
@@ -1573,10 +1593,23 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
   function stockLine(x) {
     if (x.stockKg == null) return '';
     var tag = '';
+    var sp = C.speedOf(x.dayIC, false);
     if (x.stockKg <= 0) tag = ' <span class="tag dead">ไม่มีสต๊อก</span>';
+    else if (sp === 'stuck') tag = ' <span class="tag dead">ช้ามาก/ค้าง</span>';
+    else if (sp === 'slow') tag = ' <span class="tag lo">ช้า</span>';
     else if (x.dayIC != null && x.dayIC < S.cfg.warnLow) tag = ' <span class="tag lo">▼ สต๊อกต่ำ</span>';
-    else if (x.dayIC != null && x.dayIC > S.cfg.warnHigh) tag = ' <span class="tag hi">▲ สูง</span>';
     return '<div class="gi-st">สต๊อก ' + (x.stockKg > 0 ? tonTxt(x.stockKg) + ' ตัน' : '0') + (x.stockKg > 0 && x.dayIC != null ? ' · Day IC ' + nf(x.dayIC, 1) + ' วัน' : '') + tag + '</div>';
+  }
+  /* สถานะการเคลื่อนไหวของรายการ: เคลื่อนไหว (Day IC ≤ 90) / ช้า (91–180) / ช้ามาก-ค้าง (> 180, แสดงเดือนที่ขายล่าสุด) / ไม่มี D/O */
+  function lastTxt(ym) { if (!ym) return ''; var y = ym.slice(0, 4); return C.monthShort(ym) + (S.ym && y !== S.ym.slice(0, 4) ? ' ' + (+y + 543) : ''); }
+  function speedCell(x) {
+    var t, sub = '';
+    if (x.speed === 'nodo') { t = '<span class="tag dead">ไม่มี D/O</span>'; sub = x.lastDo ? 'ขายล่าสุด ' + lastTxt(x.lastDo) : 'ไม่พบ D/O ในข้อมูล'; }
+    else if (x.speed === 'stuck') { t = '<span class="tag dead">ช้ามาก/ค้าง</span>'; sub = 'ขายล่าสุด ' + (x.lastDo ? lastTxt(x.lastDo) : '–'); }
+    else if (x.speed === 'slow') t = '<span class="tag lo">ช้า</span>';
+    else if (x.speed === 'ok') t = '<span class="tag">เคลื่อนไหว</span>';
+    else t = '<span class="tag">–</span>';
+    return t + (sub ? '<div class="stsub">' + esc(sub) + '</div>' : '');
   }
   function bestPanel(gs, canJump) {
     var res = C.bestByGroup(core(), S.ym, S.basis, gs), n = S.bs.n, win = res.windowYms, Y = +S.ym.slice(0, 4) + 543;
@@ -1628,10 +1661,12 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
       if (gSel && x.g !== gSel) return false;
       if (q && (x.m + ' ' + x.desc + ' ' + gname(x.g)).toLowerCase().indexOf(q) < 0) return false;
       if (S.items.sort === 'dead' && !x.noDo) return false;
+      if (S.items.sort === 'slow' && !(x.speed === 'nodo' || x.speed === 'slow' || x.speed === 'stuck')) return false;
       if (isFinite(minIC) && !(x.dayIC != null ? x.dayIC >= minIC : x.noDo)) return false;
       return true;
     });
     list.sort(function (a, b) {
+      if (S.items.sort === 'slow') { if (a.noDo !== b.noDo) return a.noDo ? -1 : 1; return a.noDo ? b.stockKg - a.stockKg : (b.dayIC || 0) - (a.dayIC || 0); }
       if (S.items.sort === 'ic') return (b.dayIC == null ? -1 : b.dayIC) - (a.dayIC == null ? -1 : a.dayIC);
       if (S.items.sort === 'stock') return b.stockKg - a.stockKg;
       if (a.noDo !== b.noDo) return a.noDo ? -1 : 1;
@@ -1648,12 +1683,13 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
     h += '<div class="panel" id="itemsTable"><div class="ph"><h2>รายการสินค้า · สต๊อก ' + C.ymLabel(S.ym) + '</h2><span class="hint">เทียบสต๊อกสิ้นเดือนกับ D/O ' + BASIS[S.basis] + ' · กลุ่มตามที่เลือกในหน้าภาพรวม</span></div>';
     h += '<div class="row" style="margin-bottom:12px"><div class="field"><label for="itQ">ค้นหา</label><input class="inp" id="itQ" type="search" placeholder="รหัสหรือชื่อสินค้า" value="' + esc(S.items.q) + '"></div>';
     h += '<div class="field"><label for="itGrp">กลุ่มสินค้า</label><select id="itGrp"><option value="">ทุกกลุ่มที่เลือก</option>' + selGroups().map(function (g) { return '<option value="' + esc(g) + '"' + (g === gSel ? ' selected' : '') + '>' + esc(gname(g)) + '</option>'; }).join('') + '</select></div>';
-    h += '<div class="field"><label for="itSort">เรียง</label><select id="itSort"><option value="default"' + (S.items.sort === 'default' ? ' selected' : '') + '>ไม่มี D/O ก่อน แล้วตามน้ำหนักสต๊อก</option><option value="dead"' + (S.items.sort === 'dead' ? ' selected' : '') + '>เฉพาะรายการที่ไม่มี D/O</option><option value="ic"' + (S.items.sort === 'ic' ? ' selected' : '') + '>Day IC สูงสุดก่อน</option><option value="stock"' + (S.items.sort === 'stock' ? ' selected' : '') + '>สต๊อกมากสุดก่อน</option></select></div>';
+    h += '<div class="field"><label for="itSort">เรียง</label><select id="itSort"><option value="default"' + (S.items.sort === 'default' ? ' selected' : '') + '>ไม่มี D/O ก่อน แล้วตามน้ำหนักสต๊อก</option><option value="slow"' + (S.items.sort === 'slow' ? ' selected' : '') + '>เฉพาะช้า/ค้าง (Day IC เกิน 90 วัน)</option><option value="dead"' + (S.items.sort === 'dead' ? ' selected' : '') + '>เฉพาะรายการที่ไม่มี D/O</option><option value="ic"' + (S.items.sort === 'ic' ? ' selected' : '') + '>Day IC สูงสุดก่อน</option><option value="stock"' + (S.items.sort === 'stock' ? ' selected' : '') + '>สต๊อกมากสุดก่อน</option></select></div>';
     h += '<div class="field"><label for="itMin">Day IC ตั้งแต่ (วัน)</label><input class="inp" id="itMin" type="number" min="0" step="1" style="width:90px" value="' + esc(S.items.min) + '"></div></div>';
+    h += '<div class="hint stlegend">สถานะตาม Day IC (วันทำงาน): <span class="tag">เคลื่อนไหว</span> ไม่เกิน ' + C.SLOW_MID + ' · <span class="tag lo">ช้า</span> ' + (C.SLOW_MID + 1) + '–' + C.SLOW_HIGH + ' · <span class="tag dead">ช้ามาก/ค้าง</span> เกิน ' + C.SLOW_HIGH + ' (แสดงเดือนที่ขายล่าสุด) · <span class="tag dead">ไม่มี D/O</span> ไม่มียอดส่งในช่วงที่เลือก · ของที่เพิ่งเข้าสต๊อกปลายเดือนอาจขึ้นป้ายช้า ให้ดูเดือนที่ขายล่าสุดประกอบ</div>';
     h += '<div class="scroll"><table><thead><tr><th>รหัสสินค้า</th><th class="l">รายการ</th><th class="l">กลุ่ม</th><th>สต๊อก (กก.)</th><th>D/O ในช่วง (กก.)</th><th>Day IC (วัน)</th><th class="l">สถานะ</th></tr></thead><tbody>';
     var canEditNm = S.canWrite !== false && S.dbState !== 'none';
     list.slice(0, S.items.limit).forEach(function (x) {
-      h += '<tr><td class="l">' + esc(x.m) + '</td><td class="l" style="white-space:normal;min-width:180px">' + nameCell(x, canEditNm) + '</td><td class="l">' + esc(gname(x.g)) + '</td><td class="num">' + nf(x.stockKg, 1) + '</td><td class="num">' + nf(x.doKg, 1) + '</td><td class="num">' + (x.dayIC == null ? '–' : nf(x.dayIC, 1)) + '</td><td class="l">' + (x.noDo ? '<span class="tag dead">ไม่มี D/O</span>' : '<span class="tag">เคลื่อนไหว</span>') + '</td></tr>';
+      h += '<tr><td class="l">' + esc(x.m) + '</td><td class="l" style="white-space:normal;min-width:180px">' + nameCell(x, canEditNm) + '</td><td class="l">' + esc(gname(x.g)) + '</td><td class="num">' + nf(x.stockKg, 1) + '</td><td class="num">' + nf(x.doKg, 1) + '</td><td class="num">' + (x.dayIC == null ? '–' : nf(x.dayIC, 1)) + '</td><td class="l">' + speedCell(x) + '</td></tr>';
     });
     if (!list.length) h += '<tr><td colspan="7" class="l muted">ไม่พบรายการที่ตรงเงื่อนไข</td></tr>';
     h += '</tbody></table></div>';

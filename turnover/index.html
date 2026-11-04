@@ -842,10 +842,38 @@ var Core = (function () {
     return (st.cfg && st.cfg.groupNames && st.cfg.groupNames[g]) || GROUP_NAMES[g] || (st.groupDesc && st.groupDesc[g]) || ('กลุ่ม ' + g);
   }
 
+  /* ---------- ไฟล์สำรองข้อมูล (JSON) ---------- */
+  var BACKUP_APP = 'stock-turnover-rama3';
+  function plainObj(x) { return x && typeof x === 'object' && !Array.isArray(x) ? x : {}; }
+  /* ตรวจและแปลงไฟล์สำรองที่อ่านจาก JSON แล้ว → { items:[{kind,ym,doc}], cfg, bad, exportedAt } หรือ { error } */
+  function parseBackup(o) {
+    if (!o || typeof o !== 'object' || o.app !== BACKUP_APP || !o.do || typeof o.do !== 'object' || !o.stock || typeof o.stock !== 'object') return { error: 'format' };
+    var items = [], bad = 0;
+    ['do', 'stock'].forEach(function (kind) {
+      Object.keys(o[kind]).sort().forEach(function (ym) {
+        var d = o[kind][ym];
+        if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ym) || !d || typeof d !== 'object' || !Array.isArray(d.rows) || !(d.kg >= 0)) { bad++; return; }
+        var c = JSON.parse(JSON.stringify(d)); c.ym = ym; if (!Array.isArray(c.mats)) c.mats = [];
+        items.push({ kind: kind, ym: ym, doc: c });
+      });
+    });
+    var cfg = null, c0 = o.config;
+    if (c0 && typeof c0 === 'object') {
+      var days = {}, dd = plainObj(c0.days);
+      Object.keys(dd).forEach(function (k) { if (/^\d{4}-(0[1-9]|1[0-2])$/.test(k) && dd[k] >= 1 && dd[k] <= 31) days[k] = +dd[k]; });
+      var wh = +c0.warnHigh > 0 ? +c0.warnHigh : 6, wl = +c0.warnLow >= 0 ? +c0.warnLow : 1;
+      if (wh <= wl) { wh = 6; wl = 1; }
+      cfg = { days: days, warnHigh: wh, warnLow: wl, groupNames: plainObj(c0.groupNames), itemNames: plainObj(c0.itemNames), groupDesc: plainObj(c0.groupDesc) };
+    }
+    if (!items.length && !cfg) return { error: 'empty' };
+    return { items: items, cfg: cfg, bad: bad, exportedAt: typeof o.exportedAt === 'string' ? o.exportedAt : null };
+  }
+
   return {
     TH_MONTHS: TH_MONTHS, TH_MONTH_FULL: TH_MONTH_FULL, DEFAULT_DAYS: DEFAULT_DAYS, MAIN_GROUPS: MAIN_GROUPS, EXCLUDED: EXCLUDED, GROUP_NAMES: GROUP_NAMES,
     norm: norm, num: num, pad: pad, round: round, parseDate: parseDate, ymOf: ymOf, ymLabel: ymLabel, monthShort: monthShort, addMonths: addMonths, daysInMonth: daysInMonth,
     parseDo: parseDo, parseStockSheet: parseStockSheet, parseStockWorkbook: parseStockWorkbook, parseStockMonths: parseStockMonths, detectStockDate: detectStockDate,
+    BACKUP_APP: BACKUP_APP, parseBackup: parseBackup,
     daysFor: daysFor, windowYms: windowYms, monthMetrics: monthMetrics, avgDayIC: avgDayIC, itemMetrics: itemMetrics, moverMetrics: moverMetrics, groupName: groupName
   };
 })();
@@ -867,7 +895,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
     loaded: { do: false, stock: false, cfg: false }, ym: null, basis: 'ytd', scope: 'main', sel: null, hidden: {},
     tab: 'overview', canWrite: null, db: null, user: null, dbState: 'connecting',
     staged: { do: {}, stock: [] }, msgs: { do: [], stock: [], save: [] }, busy: { do: false, stock: false, save: false },
-    items: { q: '', sort: 'default', min: '', limit: 40, edit: null }, confirmDel: null, stockSeq: 0
+    items: { q: '', sort: 'default', min: '', limit: 40, edit: null }, confirmDel: null, stockSeq: 0,
+    bk: { msgs: [], restore: null, confirm: false, busy: false, t: 0 }
   };
   try { var pf = JSON.parse(localStorage.getItem('st-prefs') || '{}'); if (BASIS[pf.basis]) S.basis = pf.basis; if (pf.scope === 'main' || pf.scope === 'all') S.scope = pf.scope; } catch (e) { }
   function savePrefs() { try { localStorage.setItem('st-prefs', JSON.stringify({ basis: S.basis, scope: S.scope })); } catch (e) { } }
@@ -1516,6 +1545,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
       h += '<div class="panel"><div class="row"><button class="btn primary" data-act="save"' + ((nDo + nSt) && !S.busy.save && !ro ? '' : ' disabled') + '>บันทึกขึ้นแดชบอร์ด (' + (nDo + nSt) + ' รายการ)</button><button class="btn" data-act="clear"' + (S.busy.save ? ' disabled' : '') + '>ล้างรายการที่รออยู่</button><span class="hint">เดือนที่เลือกไว้จะแทนที่ข้อมูลเดิมของเดือนนั้นทั้งเดือน</span></div><div class="msgs">' + S.msgs.save.map(msgHtml).join('') + (S.busy.save ? '<div class="msg">กำลังบันทึก…</div>' : '') + '</div></div>';
     }
     h += '<div class="panel"><div class="ph"><h2>ข้อมูลที่อยู่ในระบบ</h2><span class="hint">ลบได้ทีละเดือน (กดสองครั้งเพื่อยืนยัน)</span></div>' + inventoryHtml(ro) + '</div>';
+    h += '<div class="panel"><div class="ph"><h2>สำรอง / กู้คืนข้อมูล</h2><span class="hint">เก็บสำเนาไว้เผื่อมีใครลบหรือเขียนทับข้อมูลโดยไม่ตั้งใจ</span></div>' + backupHtml(ro) + '</div>';
     h += '<div class="panel"><div class="ph"><h2>ตั้งค่า</h2><span class="hint">วันทำงานต่อเดือนใช้หาร Qty/Day (ค่าเริ่มต้นตามแถว “จำนวนวัน” ในรายงานเดิม)</span></div>' + settingsHtml(ro) + '</div>';
     var fk = document.activeElement && document.activeElement.id;
     host.innerHTML = h;
@@ -1685,6 +1715,105 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
     S.busy.save = false; renderAll();
   }
 
+  /* ---------- สำรอง / กู้คืนข้อมูล (ไฟล์ JSON) ---------- */
+  function ymdLocal(d) { return d.getFullYear() + '-' + C.pad(d.getMonth() + 1) + '-' + C.pad(d.getDate()); }
+  function fmtDT(iso) {
+    try { return new Date(iso).toLocaleString('th-TH', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch (e) { return iso; }
+  }
+  function bkStatus(it) {
+    var ex = (it.kind === 'do' ? S.doDocs : S.stockDocs)[it.ym], d = it.doc;
+    if (!ex) return { t: 'เดือนใหม่ (ยังไม่มีในระบบ)', inc: true };
+    var same = Math.abs(d.kg - ex.kg) < 1 && (it.kind === 'do' ? d.last === ex.last : (d.asOf || null) === (ex.asOf || null));
+    if (same) return { t: 'เหมือนข้อมูลในระบบ', inc: false };
+    if (it.kind === 'do' && (d.last < ex.last || d.kg < ex.kg * 0.98)) return { t: 'น้อยกว่าในระบบ: ระบบมี ' + nf(ex.kg / 1000, 1) + ' ตัน ถึง ' + dd(ex.last) + ' (ไม่ได้เลือกไว้)', inc: false, warn: true };
+    return { t: 'แทนที่ ' + nf(ex.kg / 1000, 1) + ' → ' + nf(d.kg / 1000, 1) + ' ตัน', inc: true };
+  }
+  function restoreCount() {
+    var R = S.bk.restore; if (!R) return 0;
+    return R.items.filter(function (x) { return x.include; }).length + (R.cfg && R.useCfg ? 1 : 0);
+  }
+  function restoreHtml(ro) {
+    var R = S.bk.restore, n = restoreCount(), B = S.bk;
+    var h = '<div class="msg ok" style="margin-top:12px">ไฟล์ <b>' + esc(R.name) + '</b>' + (R.exportedAt ? ' · สำรองเมื่อ ' + esc(fmtDT(R.exportedAt)) : '') + ' — เลือกรายการที่จะกู้คืน เดือนที่เลือกจะแทนที่ข้อมูลเดิมของเดือนนั้นทั้งเดือน ส่วนเดือนอื่นที่ไม่อยู่ในไฟล์จะไม่ถูกแตะต้อง</div>';
+    h += '<div class="scroll" style="margin-top:10px"><table><thead><tr><th class="l">เลือก</th><th class="l">ประเภท</th><th class="l">เดือน</th><th>รายการ</th><th>น้ำหนัก (ตัน)</th><th class="l">เทียบกับข้อมูลในระบบ</th></tr></thead><tbody>';
+    R.items.forEach(function (it, i) {
+      var s = it.st, kn = it.kind === 'do' ? 'D/O' : 'สต๊อก';
+      h += '<tr><td class="l"><input type="checkbox" data-incrs="' + i + '" aria-label="เลือก ' + kn + ' ' + C.ymLabel(it.ym) + '"' + (it.include ? ' checked' : '') + '></td><td class="l">' + kn + '</td><td class="l"><b>' + C.ymLabel(it.ym) + '</b></td><td class="num">' + nf(it.doc.lines != null ? it.doc.lines : it.doc.rows.length) + '</td><td class="num">' + nf(it.doc.kg / 1000, 1) + '</td><td class="l' + (s.warn ? '" style="color:var(--yellow)' : '') + '">' + esc(s.t) + '</td></tr>';
+    });
+    if (R.cfg) h += '<tr><td class="l"><input type="checkbox" id="rs-cfg" aria-label="เลือกค่าตั้งค่า"' + (R.useCfg ? ' checked' : '') + '></td><td class="l">ตั้งค่า</td><td class="l" colspan="3">วันทำงานรายเดือน · เกณฑ์เฝ้าระวัง · ชื่อกลุ่ม/ชื่อสินค้า</td><td class="l">แทนที่ค่าตั้งค่าปัจจุบัน</td></tr>';
+    h += '</tbody></table></div>';
+    h += '<div class="row" style="margin-top:10px"><button class="btn ' + (B.confirm ? 'danger' : 'primary') + '" data-act="restore"' + (n && !B.busy && !ro ? '' : ' disabled') + '>' + (B.confirm ? 'กดอีกครั้งเพื่อยืนยันกู้คืน ' + n + ' รายการ' : 'กู้คืน ' + n + ' รายการ') + '</button><button class="btn" data-act="restorecancel"' + (B.busy ? ' disabled' : '') + '>ยกเลิก</button></div>';
+    return h;
+  }
+  function backupHtml(ro) {
+    var nDo = Object.keys(S.doDocs).length, nSt = Object.keys(S.stockDocs).length, B = S.bk;
+    var h = '<div class="row"><button class="btn primary" data-act="backup"' + (ready() && nDo + nSt ? '' : ' disabled') + '>สำรองข้อมูลทั้งหมด (ไฟล์ JSON)</button>' +
+      '<button class="btn" data-act="pickrestore"' + (ro || B.busy ? ' disabled' : '') + '>กู้คืนจากไฟล์สำรอง…</button>' +
+      '<span class="hint">ไฟล์สำรอง = D/O ' + nDo + ' เดือน · สต๊อก ' + nSt + ' เดือน · ค่าตั้งค่า รวมอยู่ในไฟล์เดียว</span></div>';
+    h += '<div class="msgs">' + B.msgs.map(msgHtml).join('') + (B.busy ? '<div class="msg">กำลังกู้คืน…</div>' : '') + '</div>';
+    if (B.restore) h += restoreHtml(ro);
+    return h;
+  }
+  async function doBackup() {
+    if (!ready()) { toast('รอให้ข้อมูลโหลดครบก่อน'); return; }
+    var dl = null;
+    try { var api = window.claude; dl = api && api.use ? await api.use('downloads') : null; } catch (e) { dl = null; }
+    if (!dl && !S.standalone) { toast('มุมมองนี้บันทึกไฟล์ไม่ได้'); return; }
+    var now = new Date(), name = 'Stock-Turnover-backup-' + ymdLocal(now) + '.json';
+    var text = JSON.stringify({ app: C.BACKUP_APP, format: 1, exportedAt: now.toISOString(), config: cfgPayload(), do: S.doDocs, stock: S.stockDocs });
+    var okMsg = { k: 'ok', t: 'สร้างไฟล์ ' + name + ' แล้ว (' + nf(Math.round(text.length / 1024)) + ' KB) เก็บไว้ในที่ปลอดภัย เช่น Google Drive หรือส่งเข้าอีเมลตัวเอง' };
+    if (!dl) {                                           // เปิดจากเว็บทั่วไป (GitHub Pages): ดาวน์โหลดตรงจากเบราว์เซอร์
+      try {
+        var url = URL.createObjectURL(new Blob([text], { type: 'application/json' })), a = document.createElement('a');
+        a.href = url; a.download = name; document.body.appendChild(a); a.click();
+        setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 1500);
+        S.bk.msgs = [okMsg]; renderUpdate();
+      } catch (e) { toast('สำรองข้อมูลไม่สำเร็จ'); }
+      return;
+    }
+    try { await dl.save({ filename: name, data: text }); S.bk.msgs = [okMsg]; renderUpdate(); } catch (e) { if (!e || e.code !== 'declined') toast('สำรองข้อมูลไม่สำเร็จ'); }
+  }
+  function pickRestore() {
+    var old = document.getElementById('file-restore'); if (old) old.remove();
+    var inp = document.createElement('input'); inp.type = 'file'; inp.id = 'file-restore'; inp.accept = '.json,application/json'; inp.style.display = 'none';
+    inp.addEventListener('change', function () { var f = inp.files && inp.files[0]; inp.remove(); if (f) handleRestore(f); });
+    inp.addEventListener('cancel', function () { inp.remove(); });
+    document.body.appendChild(inp); inp.click();
+  }
+  async function handleRestore(f) {
+    var B = S.bk; B.msgs = []; B.restore = null; B.confirm = false; clearTimeout(B.t);
+    try {
+      if (f.size > 50 * 1048576) throw { error: 'big' };
+      var res = C.parseBackup(JSON.parse(await f.text()));
+      if (res.error) throw res;
+      var items = res.items.map(function (it) { var st = bkStatus(it); return { kind: it.kind, ym: it.ym, doc: it.doc, st: st, include: st.inc }; });
+      B.restore = { name: f.name, exportedAt: res.exportedAt, items: items, cfg: res.cfg, useCfg: !!res.cfg };
+      if (res.bad) B.msgs.push({ k: 'err', t: 'ข้ามรายการที่ข้อมูลเสียหาย ' + res.bad + ' รายการ' });
+    } catch (e) {
+      var c = e && e.error;
+      B.msgs.push({ k: 'err', t: f.name + ': ' + (c === 'format' ? 'ไม่ใช่ไฟล์สำรองของแดชบอร์ดนี้ (ต้องเป็นไฟล์ .json ที่ดาวน์โหลดจากปุ่ม “สำรองข้อมูลทั้งหมด”)' : c === 'empty' ? 'ไฟล์สำรองไม่มีข้อมูล' : c === 'big' ? 'ไฟล์ใหญ่เกินไป' : 'อ่านไฟล์ไม่สำเร็จ (ไม่ใช่ไฟล์ JSON ที่ถูกต้อง)') });
+    }
+    renderUpdate();
+  }
+  async function doRestore() {
+    var B = S.bk, R = B.restore; if (!R || !S.db || B.busy) return;
+    B.busy = true; B.confirm = false; B.msgs = []; renderUpdate();
+    var ok = 0;
+    try {
+      for (var i = 0; i < R.items.length; i++) {
+        var it = R.items[i]; if (!it.include) continue;
+        await S.db.doc(it.kind + '/' + it.ym).set(it.doc); ok++;
+      }
+      if (R.cfg && R.useCfg) { await S.db.doc('config/main').set(Object.assign({}, R.cfg, { at: new Date().toISOString() })); ok++; }
+      B.restore = null; B.msgs = [{ k: 'ok', t: 'กู้คืนแล้ว ' + ok + ' รายการ แดชบอร์ดอัปเดตให้ทุกคนที่เปิดอยู่แล้ว' }]; toast('กู้คืนแล้ว ' + ok + ' รายการ');
+    } catch (e) {
+      var denied = e && (e.code === 'invalid_argument' || e.code === 'revoked' || e.code === 'not_granted' || e.code === 'permission-denied');
+      B.msgs.push({ k: 'err', t: 'กู้คืนไม่สำเร็จ (กู้คืนแล้ว ' + ok + ' รายการ): ' + (denied ? permHint() : ((e && e.message) || 'ลองใหม่อีกครั้ง')) });
+      if (denied) S.canWrite = false;
+    }
+    B.busy = false; renderAll();
+  }
+
   /* ---------- export ---------- */
   async function exportXlsx() {
     var api = window.claude, dl = api && api.use ? await api.use('downloads') : null;
@@ -1744,6 +1873,13 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
     else if (act === 'clear') { S.staged = { do: {}, stock: [] }; S.msgs = { do: [], stock: [], save: [] }; renderUpdate(); }
     else if (act === 'more') { S.items.limit += 60; renderItems(); }
     else if (act === 'export') exportXlsx();
+    else if (act === 'backup') doBackup();
+    else if (act === 'pickrestore') pickRestore();
+    else if (act === 'restore') {
+      if (!S.bk.confirm) { S.bk.confirm = true; renderUpdate(); clearTimeout(S.bk.t); S.bk.t = setTimeout(function () { S.bk.confirm = false; renderUpdate(); }, 6000); }
+      else { clearTimeout(S.bk.t); doRestore(); }
+    }
+    else if (act === 'restorecancel') { clearTimeout(S.bk.t); S.bk.restore = null; S.bk.confirm = false; S.bk.msgs = []; renderUpdate(); }
     else if (act === 'importseed') importSeed();
     else if (act === 'savecfg') {
       var days = {}, Y = S.ym ? S.ym.slice(0, 4) : String(new Date().getFullYear());
@@ -1788,6 +1924,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
     else if (t.id === 'itMin') { S.items.min = t.value; renderItems(); }
     else if (t.id === 'file-do') { var fd = Array.prototype.slice.call(t.files); t.value = ''; if (fd.length) handleDo(fd); }
     else if (t.id === 'file-stock') { var fs = Array.prototype.slice.call(t.files); t.value = ''; if (fs.length) handleStock(fs); }
+    else if (t.hasAttribute('data-incrs')) { var rr = S.bk.restore; if (rr && rr.items[+t.getAttribute('data-incrs')]) { rr.items[+t.getAttribute('data-incrs')].include = t.checked; S.bk.confirm = false; renderUpdate(); } }
+    else if (t.id === 'rs-cfg') { if (S.bk.restore) { S.bk.restore.useCfg = t.checked; S.bk.confirm = false; renderUpdate(); } }
     else if (t.hasAttribute('data-incdo')) { S.staged.do[t.getAttribute('data-incdo')].include = t.checked; renderUpdate(); }
     else if (t.hasAttribute('data-incst')) { S.staged.stock.forEach(function (x) { if (String(x.id) === t.getAttribute('data-incst')) x.include = t.checked; }); renderUpdate(); }
     else if (t.hasAttribute('data-stym')) { S.staged.stock.forEach(function (x) { if (String(x.id) === t.getAttribute('data-stym')) x.ym = t.value; }); renderUpdate(); }

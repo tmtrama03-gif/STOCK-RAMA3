@@ -235,6 +235,41 @@ td.tu { font-weight: 600; color: var(--accent-text); }
 .bar { height: 6px; border-radius: 3px; background: var(--surface-2); min-width: 64px; position: relative; }
 .bar i { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--stk); }
 
+/* สินค้าขายดีแยกตามกลุ่ม (แท็บรายการสินค้า) */
+#bestPanel { display: flex; flex-direction: column; gap: 10px; }
+#bestPanel .ph { margin-bottom: 0; }
+.bsctl { align-items: flex-end; row-gap: 8px; }
+.bsctl .field { flex-direction: column; align-items: flex-start; gap: 4px; }
+.bsctl .seg { flex-wrap: wrap; }
+.bsinfo { line-height: 1.5; }
+.bsrisk { font-size: 13px; color: var(--ink-2); display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.gcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 12px; margin-top: 2px; }
+.gcard { background: var(--surface-3); border: 1px solid var(--line); border-top: 3px solid var(--blue); border-radius: 10px; padding: 12px 14px 10px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.gcard.lead { border-top-color: var(--accent); }
+.gcard-h { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.gtt { min-width: 0; }
+.gcard-h h3 { font-size: 15px; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
+.gcard-h .hint { margin-top: 1px; }
+.gtot { text-align: right; white-space: nowrap; display: flex; align-items: baseline; gap: 4px; }
+.gtot b { font-size: 21px; font-weight: 600; line-height: 1.1; color: var(--accent-text); }
+.gtot small { font-size: 12px; color: var(--ink-3); }
+.gitems { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.gi { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 0 10px; padding: 9px 0; border-top: 1px dashed var(--line); align-items: start; }
+.gi:first-child { border-top: 0; }
+.rk { width: 22px; height: 22px; border-radius: 50%; background: var(--surface-2); color: var(--ink-2); font-size: 12px; font-weight: 600; display: grid; place-items: center; margin-top: 1px; }
+.rk.r1 { background: var(--yellow); color: #0c3843; }
+.gi-main { min-width: 0; }
+.gi-code { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.gi-desc { font-size: 12px; color: var(--ink-3); overflow-wrap: anywhere; line-height: 1.35; margin-top: 1px; }
+.gi-bar { height: 5px; border-radius: 3px; background: var(--surface-2); margin-top: 6px; overflow: hidden; }
+.gi-bar i { display: block; height: 100%; border-radius: 3px; background: var(--do); }
+.gi-st { font-size: 12px; color: var(--ink-2); margin-top: 5px; line-height: 1.5; }
+.gi-val { text-align: right; white-space: nowrap; display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
+.gi-val b { font-size: 14px; font-weight: 600; }
+.gi-val span { font-size: 11.5px; color: var(--ink-3); line-height: 1.35; }
+.gcard-f { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 4px 10px; border-top: 1px solid var(--line); padding-top: 7px; margin-top: auto; }
+@media (max-width: 480px) { .gi { grid-template-columns: 22px minmax(0, 1fr); } .gi-val { grid-column: 2; flex-direction: row; align-items: baseline; justify-content: flex-start; gap: 8px; margin-top: 3px; } }
+
 /* update tab */
 .drop { position: relative; display: block; border: 2px dashed var(--line-strong); border-radius: 12px; padding: 22px 16px; text-align: center; background: var(--surface-3); color: var(--ink-2); cursor: pointer; }
 .drop:hover, .drop.over { border-color: var(--yellow); background: var(--surface-2); color: var(--ink); }
@@ -838,6 +873,53 @@ var Core = (function () {
     return { windowYms: win, fast: fast, dead: dead, minAvgPcs: minAvgPcs };
   }
 
+  // สินค้าขายดีแยกตามกลุ่ม: จัดอันดับทุกรายการในกลุ่มตามน้ำหนัก D/O ที่จัดส่งแล้วในช่วงที่เลือก (ช่วงเดียวกับ Qty/Day คิดจาก)
+  //  · น้ำหนักรวมของกลุ่มอ่านจากแถวสรุปกลุ่มของรายงาน D/O (ไม่ขึ้นกับจำนวนรายการที่เก็บ) · สัดส่วน = น้ำหนักรายการ ÷ น้ำหนักรวมกลุ่ม
+  //  · ถ้ามีสต๊อกของเดือน ym: ใส่สต๊อกคงเหลือ + Day IC สูตรเดียวกับตารางรายการสินค้า (สต๊อกสิ้นเดือน ÷ (D/O ในช่วง ÷ วันทำงานในช่วง))
+  //    รายการที่มียอดส่งแต่ไม่อยู่ในไฟล์สต๊อกสิ้นเดือน = ไม่มีสต๊อกคงเหลือ (stockKg 0)
+  function bestByGroup(st, ym, basis, groupsSet, start) {
+    var win = windowYms(ym, basis, st.doDocs, start);
+    var days = win.reduce(function (s, x) { return s + daysFor(st.cfg, x); }, 0);
+    var stDoc = st.stockDocs[ym], now = {};
+    if (stDoc) (stDoc.mats || []).forEach(function (m) { now[m[0]] = m; });
+    var allDesc = buildAllDesc(st), man = (st.cfg && st.cfg.itemNames) || {};
+    var G = {}, T = {}, groups = [];
+    win.forEach(function (x) {
+      var doc = st.doDocs[x];
+      (doc.rows || []).forEach(function (r) {
+        if (groupsSet && !groupsSet[r[0]]) return;
+        var a = G[r[0]] || (G[r[0]] = { g: r[0], kg: 0, pcs: 0, items: [] });
+        a.kg += r[1]; a.pcs += (r[2] || 0);
+      });
+      (doc.mats || []).forEach(function (m) {
+        if (groupsSet && !groupsSet[m[1]]) return;
+        var t = T[m[0]] || (T[m[0]] = { m: m[0], g: m[1], kg: 0, pcs: 0, desc: '' });
+        t.kg += m[2]; t.pcs += (m[3] || 0);
+        if (m[4] && !t.desc) t.desc = m[4];
+      });
+    });
+    Object.keys(T).forEach(function (k) {
+      var t = T[k]; if (!(t.kg > 0)) return;
+      var g = G[t.g] || (G[t.g] = { g: t.g, kg: 0, pcs: 0, items: [] }), c = now[t.m];
+      var it = { m: t.m, g: t.g, desc: man[t.m] || t.desc || allDesc[t.m] || '', kg: t.kg, pcs: t.pcs, share: null, stockKg: null, stockPcs: null, dayIC: null };
+      if (stDoc) {
+        it.stockKg = c ? c[2] : 0; it.stockPcs = c ? (c[3] || 0) : 0;
+        var qd = days > 0 && win.length ? t.kg / days : null;
+        it.dayIC = (qd && qd > 0) ? it.stockKg / qd : null;
+      }
+      g.items.push(it);
+    });
+    Object.keys(G).forEach(function (k) {
+      var g = G[k]; if (!g.items.length) return;
+      g.items.sort(function (a, b) { return b.kg - a.kg || (a.m < b.m ? -1 : 1); });
+      g.n = g.items.length;
+      g.items.forEach(function (it) { it.share = g.kg > 0 ? it.kg / g.kg * 100 : null; });
+      groups.push(g);
+    });
+    groups.sort(function (a, b) { return b.kg - a.kg; });
+    return { windowYms: win, days: days, hasStock: !!stDoc, groups: groups };
+  }
+
   function groupName(st, g) {
     return (st.cfg && st.cfg.groupNames && st.cfg.groupNames[g]) || GROUP_NAMES[g] || (st.groupDesc && st.groupDesc[g]) || ('กลุ่ม ' + g);
   }
@@ -874,7 +956,7 @@ var Core = (function () {
     norm: norm, num: num, pad: pad, round: round, parseDate: parseDate, ymOf: ymOf, ymLabel: ymLabel, monthShort: monthShort, addMonths: addMonths, daysInMonth: daysInMonth,
     parseDo: parseDo, parseStockSheet: parseStockSheet, parseStockWorkbook: parseStockWorkbook, parseStockMonths: parseStockMonths, detectStockDate: detectStockDate,
     BACKUP_APP: BACKUP_APP, parseBackup: parseBackup,
-    daysFor: daysFor, windowYms: windowYms, monthMetrics: monthMetrics, avgDayIC: avgDayIC, itemMetrics: itemMetrics, moverMetrics: moverMetrics, groupName: groupName
+    daysFor: daysFor, windowYms: windowYms, monthMetrics: monthMetrics, avgDayIC: avgDayIC, itemMetrics: itemMetrics, moverMetrics: moverMetrics, bestByGroup: bestByGroup, groupName: groupName
   };
 })();
 if (typeof module !== 'undefined' && module.exports) module.exports = Core;
@@ -895,11 +977,12 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
     loaded: { do: false, stock: false, cfg: false }, ym: null, basis: 'ytd', scope: 'main', sel: null, hidden: {},
     tab: 'overview', canWrite: null, db: null, user: null, dbState: 'connecting',
     staged: { do: {}, stock: [] }, msgs: { do: [], stock: [], save: [] }, busy: { do: false, stock: false, save: false },
-    items: { q: '', sort: 'default', min: '', limit: 40, edit: null }, confirmDel: null, stockSeq: 0,
+    items: { q: '', sort: 'default', min: '', limit: 40, edit: null, g: '' }, bs: { n: 5 }, confirmDel: null, stockSeq: 0,
     bk: { msgs: [], restore: null, confirm: false, busy: false, t: 0 }, ymAuto: true
   };
-  try { var pf = JSON.parse(localStorage.getItem('st-prefs') || '{}'); if (BASIS[pf.basis]) S.basis = pf.basis; if (pf.scope === 'main' || pf.scope === 'all') S.scope = pf.scope; } catch (e) { }
-  function savePrefs() { try { localStorage.setItem('st-prefs', JSON.stringify({ basis: S.basis, scope: S.scope })); } catch (e) { } }
+  var BS_N = [3, 5, 10];
+  try { var pf = JSON.parse(localStorage.getItem('st-prefs') || '{}'); if (BASIS[pf.basis]) S.basis = pf.basis; if (pf.scope === 'main' || pf.scope === 'all') S.scope = pf.scope; if (BS_N.indexOf(pf.bsn) >= 0) S.bs.n = pf.bsn; } catch (e) { }
+  function savePrefs() { try { localStorage.setItem('st-prefs', JSON.stringify({ basis: S.basis, scope: S.scope, bsn: S.bs.n })); } catch (e) { } }
 
   /* light / dark toggle (icon only); stays on the viewer's system setting until they press it */
   var SUN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>';
@@ -1095,6 +1178,16 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
   }
 
   /* ----- overview ----- */
+  /* ปุ่มเลือกเดือน 12 ปุ่ม (จุดสี = มีข้อมูล D/O / สต๊อก) ใช้ร่วมกันทั้งหน้าภาพรวมและแผงสินค้าขายดี — คลิกแล้วเปลี่ยนเดือนที่เลือกทั้งแดชบอร์ด */
+  function monthChips() {
+    var Y = S.ym ? S.ym.slice(0, 4) : String(new Date().getFullYear());
+    var h = '<div class="months" role="group" aria-label="เลือกเดือน">';
+    for (var m = 1; m <= 12; m++) {
+      var ym = C.ymOf(+Y, m), hd = !!S.doDocs[ym], hs = !!S.stockDocs[ym];
+      h += '<button class="mo" data-ym="' + ym + '" aria-pressed="' + (ym === S.ym) + '"' + ((hd || hs) ? '' : ' disabled') + ' title="' + C.TH_MONTH_FULL[m - 1] + ' · D/O ' + (hd ? 'มี' : 'ไม่มี') + ' · สต๊อก ' + (hs ? 'มี' : 'ไม่มี') + '"><span>' + C.TH_MONTHS[m - 1] + '</span><span class="pips"><i class="pip do' + (hd ? ' on' : '') + '"></i><i class="pip st' + (hs ? ' on' : '') + '"></i></span></button>';
+    }
+    return h + '</div>';
+  }
   function renderControls() {
     var years = yearList(), Y = S.ym ? S.ym.slice(0, 4) : String(new Date().getFullYear());
     var h = '<div class="row">';
@@ -1102,12 +1195,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
     h += '<div class="field"><label for="basisSel">Qty/Day คิดจาก</label><select id="basisSel">' + Object.keys(BASIS).map(function (k) { return '<option value="' + k + '"' + (k === S.basis ? ' selected' : '') + '>' + BASIS[k] + '</option>'; }).join('') + '</select></div>';
     h += '<div class="field"><span class="lbl">กลุ่มสินค้า</span><span class="seg" role="group" aria-label="ขอบเขตกลุ่มสินค้า"><button data-scope="main" aria-pressed="' + (S.scope === 'main') + '">6 กลุ่มหลัก</button><button data-scope="all" aria-pressed="' + (S.scope === 'all') + '">ทุกกลุ่ม</button></span></div>';
     h += '</div>';
-    h += '<div class="months" role="group" aria-label="เลือกเดือน">';
-    for (var m = 1; m <= 12; m++) {
-      var ym = C.ymOf(+Y, m), hd = !!S.doDocs[ym], hs = !!S.stockDocs[ym];
-      h += '<button class="mo" data-ym="' + ym + '" aria-pressed="' + (ym === S.ym) + '"' + ((hd || hs) ? '' : ' disabled') + ' title="' + C.TH_MONTH_FULL[m - 1] + ' · D/O ' + (hd ? 'มี' : 'ไม่มี') + ' · สต๊อก ' + (hs ? 'มี' : 'ไม่มี') + '"><span>' + C.TH_MONTHS[m - 1] + '</span><span class="pips"><i class="pip do' + (hd ? ' on' : '') + '"></i><i class="pip st' + (hs ? ' on' : '') + '"></i></span></button>';
-    }
-    h += '</div>';
+    h += monthChips();
     var groups = scopeGroups(), sel = selGroups();
     h += '<div class="chips" role="group" aria-label="เลือกกลุ่มสินค้า">' + groups.map(function (g) {
       return '<button class="chip" data-g="' + g + '" aria-pressed="' + (sel.indexOf(g) >= 0) + '" title="' + g + '">' + esc(gname(g)) + '</button>';
@@ -1479,22 +1567,65 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
     }
     return h + '</div></div>';
   }
+  /* ---------- สินค้าขายดีแยกตามกลุ่มสินค้า ---------- */
+  var PERIOD = { month: 'เฉพาะเดือนนี้', ytd: 'สะสมตั้งแต่ ม.ค.', r3: '3 เดือนล่าสุด', r6: '6 เดือนล่าสุด' };
+  function tonTxt(kg) { var t = kg / 1000, a = Math.abs(t); return nf(t, a >= 100 ? 0 : a >= 1 ? 1 : 2); }
+  function stockLine(x) {
+    if (x.stockKg == null) return '';
+    var tag = '';
+    if (x.stockKg <= 0) tag = ' <span class="tag dead">ไม่มีสต๊อก</span>';
+    else if (x.dayIC != null && x.dayIC < S.cfg.warnLow) tag = ' <span class="tag lo">▼ สต๊อกต่ำ</span>';
+    else if (x.dayIC != null && x.dayIC > S.cfg.warnHigh) tag = ' <span class="tag hi">▲ สูง</span>';
+    return '<div class="gi-st">สต๊อก ' + (x.stockKg > 0 ? tonTxt(x.stockKg) + ' ตัน' : '0') + (x.stockKg > 0 && x.dayIC != null ? ' · Day IC ' + nf(x.dayIC, 1) + ' วัน' : '') + tag + '</div>';
+  }
+  function bestPanel(gs, canJump) {
+    var res = C.bestByGroup(core(), S.ym, S.basis, gs), n = S.bs.n, win = res.windowYms, Y = +S.ym.slice(0, 4) + 543;
+    var h = '<div class="panel" id="bestPanel"><div class="ph"><h2>สินค้าขายดีแยกตามกลุ่มสินค้า</h2><span class="hint">จัดอันดับตามน้ำหนัก D/O ที่จัดส่งแล้ว · นับทุกรายการในรายงาน D/O</span></div>';
+    h += '<div class="row bsctl">';
+    h += '<div class="field"><span class="lbl">ช่วงเวลา</span><span class="seg" role="group" aria-label="ช่วงเวลา">' + Object.keys(PERIOD).map(function (k) { return '<button data-bsb="' + k + '" aria-pressed="' + (S.basis === k) + '">' + PERIOD[k] + '</button>'; }).join('') + '</span></div>';
+    h += '<div class="field"><span class="lbl">แสดงอันดับละ</span><span class="seg" role="group" aria-label="จำนวนอันดับต่อกลุ่ม">' + BS_N.map(function (k) { return '<button data-act="gbn" data-n="' + k + '" aria-pressed="' + (n === k) + '">Top ' + k + '</button>'; }).join('') + '</span></div>';
+    h += '<div class="field"><span class="lbl">กลุ่มสินค้า</span><span class="seg" role="group" aria-label="ขอบเขตกลุ่มสินค้า"><button data-scope="main" aria-pressed="' + (S.scope === 'main') + '">6 กลุ่มหลัก</button><button data-scope="all" aria-pressed="' + (S.scope === 'all') + '">ทุกกลุ่ม</button></span></div>';
+    h += '</div>' + monthChips();
+    if (!win.length) return h + '<div class="empty muted" style="padding:22px 0">ไม่มีข้อมูล D/O ในช่วงนี้ — เลือกเดือนที่มีจุดสีส้ม (มี D/O) หรือเปลี่ยนช่วงเวลา</div></div>';
+    var totKg = res.groups.reduce(function (a, g) { return a + g.kg; }, 0), risk = 0;
+    res.groups.forEach(function (g) { g.items.slice(0, n).forEach(function (x) { if (x.stockKg != null && (x.stockKg <= 0 || (x.dayIC != null && x.dayIC < S.cfg.warnLow))) risk++; }); });
+    h += '<div class="hint bsinfo">ช่วง ' + esc(rangeLabel(win)) + ' ' + Y + ' (' + win.length + ' เดือน · ' + res.days + ' วันทำงาน) · D/O รวม ' + nf(tn(totKg), 1) + ' ตัน · ' + res.groups.length + ' กลุ่ม · กลุ่มเรียงตามน้ำหนัก D/O รวม · กลุ่มตามที่เลือกในหน้าภาพรวม';
+    h += res.hasStock ? ' · สต๊อก = สต๊อกสิ้นเดือน ' + esc(C.monthShort(S.ym)) + ' · Day IC = สต๊อก ÷ (D/O ในช่วง ÷ วันทำงาน)</div>' : '</div><div class="hint bsinfo">' + esc(C.ymLabel(S.ym)) + ' ยังไม่มีข้อมูลสต๊อก จึงยังไม่แสดงสต๊อกและ Day IC ของรายการ</div>';
+    if (res.hasStock && risk) h += '<div class="bsrisk"><span class="tag lo">▼ เฝ้าระวัง</span> สินค้าขายดี (ใน Top ' + n + ') ที่สต๊อกต่ำหรือไม่มีสต๊อก <b>' + risk + '</b> รายการ — ดูป้ายสีในการ์ดด้านล่าง</div>';
+    if (!res.groups.length) return h + '<div class="empty muted" style="padding:22px 0">ไม่มียอดส่งของกลุ่มที่เลือกในช่วงนี้</div></div>';
+    h += '<div class="gcards">';
+    res.groups.forEach(function (g, gi) {
+      var top = g.items.slice(0, n), topKg = g.items[0].kg, sumTop = top.reduce(function (a, x) { return a + x.kg; }, 0);
+      h += '<div class="gcard' + (gi === 0 ? ' lead' : '') + '"><div class="gcard-h"><div class="gtt"><h3>' + esc(gname(g.g)) + '</h3><div class="hint">' + esc(g.g) + ' · ' + nf(g.n) + ' รายการที่มียอดส่ง</div></div><div class="gtot num"><b>' + tonTxt(g.kg) + '</b><small>ตัน</small></div></div><ol class="gitems">';
+      top.forEach(function (x, i) {
+        var tip = x.m + (x.desc ? ' · ' + x.desc : '') + ' · D/O ' + nf(x.kg, 0) + ' กก.' + (x.pcs > 0 ? ' · ' + nf(x.pcs) + ' ชิ้น' : '') + (x.share != null ? ' · ' + nf(x.share, 1) + '% ของกลุ่ม' : '');
+        h += '<li class="gi" title="' + esc(tip) + '"><span class="rk' + (i === 0 ? ' r1' : '') + '">' + (i + 1) + '</span><div class="gi-main"><b class="gi-code">' + esc(x.m) + '</b>' + (x.desc ? '<div class="gi-desc">' + esc(x.desc) + '</div>' : '') +
+          '<div class="gi-bar"><i style="width:' + Math.max(2, x.kg / topKg * 100).toFixed(1) + '%"></i></div>' + stockLine(x) + '</div>' +
+          '<div class="gi-val num"><b>' + tonTxt(x.kg) + ' ตัน</b>' + (x.share != null ? '<span>' + nf(x.share, 1) + '% ของกลุ่ม</span>' : '') + (x.pcs > 0 ? '<span>' + nf(x.pcs) + ' ชิ้น</span>' : '') + '</div></li>';
+      });
+      h += '</ol><div class="gcard-f"><span class="hint">แสดง ' + top.length + ' จาก ' + nf(g.n) + ' รายการ · Top ' + top.length + ' รวม ' + nf(g.kg > 0 ? sumTop / g.kg * 100 : 0, 0) + '% ของกลุ่ม</span>' +
+        (canJump ? '<button class="lnk" data-act="gbjump" data-gc="' + esc(g.g) + '">ดูสต๊อกทั้งกลุ่ม ↓</button>' : '') + '</div></div>';
+    });
+    return h + '</div></div>';
+  }
   function renderItems() {
     var host = $('#view-items');
     if (!ready()) { host.innerHTML = '<div class="panel"><div class="empty muted">กำลังโหลดข้อมูล…</div></div>'; return; }
+    var gs = {}; selGroups().forEach(function (g) { gs[g] = 1; });
     if (!S.ym || !S.stockDocs[S.ym]) {
       var lastSt = Object.keys(S.stockDocs).sort().pop();       // เดือนล่าสุดที่มีสต๊อก → ปุ่มลัด
       host.innerHTML = '<div class="panel"><div class="empty"><h2>' + (S.ym ? esc(C.ymLabel(S.ym)) + ' ยังไม่มีข้อมูลสต๊อก' : 'เดือนนี้ยังไม่มีข้อมูลสต๊อก') + '</h2><div>เลือกเดือนที่มีข้อมูลที่หน้า “ภาพรวม” หรืออัปโหลดสต๊อกของเดือนนี้ที่แท็บ “อัปเดตข้อมูล”</div><div class="row" style="justify-content:center;margin-top:12px">' +
         (lastSt ? '<button class="btn primary" data-ym="' + lastSt + '">ดูรายการสินค้า ' + esc(C.ymLabel(lastSt)) + '</button>' : '') +
-        '<button class="btn" data-tab-go="overview">ไปหน้าภาพรวม</button></div></div></div>';
+        '<button class="btn" data-tab-go="overview">ไปหน้าภาพรวม</button></div></div></div>' + (S.ym ? bestPanel(gs, false) : '');
       return;
     }
-    var gs = {}; selGroups().forEach(function (g) { gs[g] = 1; });
     var res = C.itemMetrics(core(), S.ym, S.basis, gs), items = res.items, q = S.items.q.trim().toLowerCase();
+    var gSel = S.items.g && gs[S.items.g] ? S.items.g : '';
     var totalKg = items.reduce(function (a, x) { return a + x.stockKg; }, 0);
     var dead = items.filter(function (x) { return x.noDo; }), deadKg = dead.reduce(function (a, x) { return a + x.stockKg; }, 0);
     var minIC = parseFloat(S.items.min);
     var list = items.filter(function (x) {
+      if (gSel && x.g !== gSel) return false;
       if (q && (x.m + ' ' + x.desc + ' ' + gname(x.g)).toLowerCase().indexOf(q) < 0) return false;
       if (S.items.sort === 'dead' && !x.noDo) return false;
       if (isFinite(minIC) && !(x.dayIC != null ? x.dayIC >= minIC : x.noDo)) return false;
@@ -1512,9 +1643,11 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
     h += kpi('รายการที่มีสต๊อก', nf(items.length), 'รายการ', nf(tn(totalKg), 1) + ' ตัน');
     h += kpi('ช่วง D/O ที่ใช้เทียบ', res.windowYms.length, 'เดือน', esc(winTxt) + ' · ' + res.days + ' วันทำงาน');
     h += '</div>';
+    h += bestPanel(gs, true);
     h += moverCards(gs);
-    h += '<div class="panel"><div class="ph"><h2>รายการสินค้า · สต๊อก ' + C.ymLabel(S.ym) + '</h2><span class="hint">เทียบสต๊อกสิ้นเดือนกับ D/O ' + BASIS[S.basis] + ' · กลุ่มตามที่เลือกในหน้าภาพรวม</span></div>';
+    h += '<div class="panel" id="itemsTable"><div class="ph"><h2>รายการสินค้า · สต๊อก ' + C.ymLabel(S.ym) + '</h2><span class="hint">เทียบสต๊อกสิ้นเดือนกับ D/O ' + BASIS[S.basis] + ' · กลุ่มตามที่เลือกในหน้าภาพรวม</span></div>';
     h += '<div class="row" style="margin-bottom:12px"><div class="field"><label for="itQ">ค้นหา</label><input class="inp" id="itQ" type="search" placeholder="รหัสหรือชื่อสินค้า" value="' + esc(S.items.q) + '"></div>';
+    h += '<div class="field"><label for="itGrp">กลุ่มสินค้า</label><select id="itGrp"><option value="">ทุกกลุ่มที่เลือก</option>' + selGroups().map(function (g) { return '<option value="' + esc(g) + '"' + (g === gSel ? ' selected' : '') + '>' + esc(gname(g)) + '</option>'; }).join('') + '</select></div>';
     h += '<div class="field"><label for="itSort">เรียง</label><select id="itSort"><option value="default"' + (S.items.sort === 'default' ? ' selected' : '') + '>ไม่มี D/O ก่อน แล้วตามน้ำหนักสต๊อก</option><option value="dead"' + (S.items.sort === 'dead' ? ' selected' : '') + '>เฉพาะรายการที่ไม่มี D/O</option><option value="ic"' + (S.items.sort === 'ic' ? ' selected' : '') + '>Day IC สูงสุดก่อน</option><option value="stock"' + (S.items.sort === 'stock' ? ' selected' : '') + '>สต๊อกมากสุดก่อน</option></select></div>';
     h += '<div class="field"><label for="itMin">Day IC ตั้งแต่ (วัน)</label><input class="inp" id="itMin" type="number" min="0" step="1" style="width:90px" value="' + esc(S.items.min) + '"></div></div>';
     h += '<div class="scroll"><table><thead><tr><th>รหัสสินค้า</th><th class="l">รายการ</th><th class="l">กลุ่ม</th><th>สต๊อก (กก.)</th><th>D/O ในช่วง (กก.)</th><th>Day IC (วัน)</th><th class="l">สถานะ</th></tr></thead><tbody>';
@@ -1856,6 +1989,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
     if (t.hasAttribute('data-tab-go')) { setTab(t.getAttribute('data-tab-go')); return; }
     if (t.hasAttribute('data-ym') && !t.disabled) { S.ymAuto = false; S.ym = t.getAttribute('data-ym'); renderAll(); return; }
     if (t.hasAttribute('data-scope')) { S.scope = t.getAttribute('data-scope'); S.sel = null; savePrefs(); renderAll(); return; }
+    if (t.hasAttribute('data-bsb')) { var bk = t.getAttribute('data-bsb'); if (BASIS[bk]) { S.basis = bk; savePrefs(); renderAll(); } return; }
     if (t.hasAttribute('data-g')) {
       var g = t.getAttribute('data-g'), all = scopeGroups(), cur = S.sel ? new Set(S.sel) : new Set(all);
       if (cur.has(g)) { if (cur.size > 1) cur.delete(g); } else cur.add(g);
@@ -1877,6 +2011,12 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
     } else if (act === 'save') saveStaged();
     else if (act === 'clear') { S.staged = { do: {}, stock: [] }; S.msgs = { do: [], stock: [], save: [] }; renderUpdate(); }
     else if (act === 'more') { S.items.limit += 60; renderItems(); }
+    else if (act === 'gbn') { var bn = +t.getAttribute('data-n'); if (BS_N.indexOf(bn) >= 0) { S.bs.n = bn; savePrefs(); renderItems(); } }
+    else if (act === 'gbjump') {          // จากการ์ดกลุ่ม → กรองตารางรายการสินค้าด้านล่างเป็นกลุ่มนั้น แล้วเลื่อนลงไป
+      S.items.g = t.getAttribute('data-gc'); S.items.q = ''; S.items.min = ''; S.items.sort = 'default'; S.items.limit = 40;
+      renderItems();
+      var tb = $('#itemsTable'); if (tb && tb.scrollIntoView) { try { tb.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) { tb.scrollIntoView(); } }
+    }
     else if (act === 'export') exportXlsx();
     else if (act === 'backup') doBackup();
     else if (act === 'pickrestore') pickRestore();
@@ -1925,6 +2065,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = Core;
       renderItems();
       saveCfg().then(function () { toast(nm ? 'บันทึกชื่อสินค้าแล้ว' : 'ลบชื่อที่พิมพ์ไว้แล้ว'); }, function () { toast('บันทึกชื่อไม่สำเร็จ ' + permHint()); });
     }
+    else if (t.id === 'itGrp') { S.items.g = t.value; S.items.limit = 40; renderItems(); }
     else if (t.id === 'itSort') { S.items.sort = t.value; renderItems(); }
     else if (t.id === 'itMin') { S.items.min = t.value; renderItems(); }
     else if (t.id === 'file-do') { var fd = Array.prototype.slice.call(t.files); t.value = ''; if (fd.length) handleDo(fd); }
